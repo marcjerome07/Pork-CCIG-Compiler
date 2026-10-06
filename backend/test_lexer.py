@@ -27,7 +27,7 @@ SNIPPETS = {
         "sauce price = 150.50;\n"
         "chop grade = 'A';\n"
         r"chop tab = '\t';" "\n"
-        "chop blank = ' ';\n"
+        "chop hash = '#';\n"
         r'recipe dish = "Sisig\n";' "\n"
         'recipe none = "";\n'
         "cooked done = yummy ;"
@@ -134,11 +134,17 @@ class LiteralTests(unittest.TestCase):
             ("sauce_lit", "150.50"),
             ("chop_lit", "'A'"),
             ("chop_lit", r"'\t'"),
-            ("chop_lit", "' '"),
+            ("chop_lit", "'#'"),
             ("recipe_lit", r'"Sisig\n"'),
             ("recipe_lit", '""'),
             ("yummy", "yummy"),
         ])
+
+    def test_chop_space_is_error(self):
+        result = tokenize("chop c = ' ';")
+        self.assertEqual([(e.line, e.col) for e in result.errors], [(1, 10)])
+        self.assertIn("cannot be a space", result.errors[0].message)
+        self.assertIn((";", ";", 1, 13), visible(result))
 
     def test_numeric_limits(self):
         self.assertEqual(visible(tokenize("999999999999999")), [("meat_lit", "999999999999999", 1, 1)])

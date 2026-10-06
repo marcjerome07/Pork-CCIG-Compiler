@@ -5,21 +5,21 @@ reserved words, reserved symbols, identifiers, literals, comments and
 whitespace. It never parses, type-checks or executes the source.
 
 How the specification is applied (decided by the project group):
-  * Transition diagrams (spec pp. 76-85) define the token paths and the
+  * Transition diagrams (spec pp. 74-83) define the token paths and the
     delimiter that must follow each token.
   * Where a diagram contradicts the written rules or regular definitions,
     the written rules win (e.g. escapes start with a backslash, identifiers
     may contain underscores and have up to 20 characters).
   * Symbols that have no transition diagram are recognized without a
     delimiter check.
-  * Every token listed in the regular-expression table (spec pp. 70-73) is
+  * Every token listed in the regular-expression table (spec pp. 69-73) is
     reported, including space, newline, tab and comments.
 """
 
 from dataclasses import asdict, dataclass, field
 
 # ---------------------------------------------------------------------------
-# Regular definitions (spec pp. 73-74)
+# Regular definitions (spec pp. 72-73)
 # ---------------------------------------------------------------------------
 
 DIGITS = frozenset("0123456789")
@@ -81,8 +81,8 @@ DELIMITERS = {
 }
 
 # ---------------------------------------------------------------------------
-# Reserved words (spec p. 5-6 for meaning, pp. 70-71 for groups,
-# pp. 76-77 for the delimiter that must follow each word)
+# Reserved words (spec p. 5-6 for meaning, pp. 69-70 for groups,
+# pp. 74-75 for the delimiter that must follow each word)
 # ---------------------------------------------------------------------------
 
 
@@ -133,10 +133,10 @@ KEYWORDS = (
 KEYWORD_DELIMITER = {kw.word: kw.delimiter for kw in KEYWORDS}
 
 # ---------------------------------------------------------------------------
-# Reserved symbols (spec pp. 7-8 and 71-73)
+# Reserved symbols (spec pp. 7-8 and 70-71)
 # ---------------------------------------------------------------------------
 
-# Symbols drawn in the reserved-symbol transition diagram (spec p. 78),
+# Symbols drawn in the reserved-symbol transition diagram (spec p. 76),
 # with the delimiter that must follow each one.
 DIAGRAM_SYMBOLS = {
     "=": "delim7", "==": "delim8",
@@ -163,7 +163,7 @@ SYMBOLS_LONGEST_FIRST = sorted(
 )
 
 # ---------------------------------------------------------------------------
-# Literal and identifier limits (written rules, spec pp. 8-11)
+# Literal and identifier limits (written rules, spec pp. 8-10, October 1, 2026 version)
 # ---------------------------------------------------------------------------
 
 MAX_IDENTIFIER_LENGTH = 20
@@ -484,6 +484,10 @@ class _Lexer:
         body = self.src[self.i + 1:close]
         if body == "":
             self.fail("Empty chop literal ''; a chop literal must contain one character.", end)
+            return
+        if body == " ":
+            # chop rule 1 (spec p. 10): a chop value cannot be a space.
+            self.fail("chop literal ' ' is not allowed; a chop value cannot be a space.", end)
             return
         start_i = self.i
         count, ok = self.check_literal_body(body, self.col + 1, _is_ascii1, "chop")
