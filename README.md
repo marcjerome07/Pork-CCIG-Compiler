@@ -6,6 +6,8 @@ A browser-based compiler for **Pork CCig**, a cooking-themed, C-like programming
 - **Frontend:** React + Vite
 - **Compiler logic:** Python
 
+![Pork CCig Compiler interface](docs/screenshot.png)
+
 ---
 
 ## Quick Start
