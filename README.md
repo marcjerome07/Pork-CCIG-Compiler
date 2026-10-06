@@ -1,7 +1,6 @@
 # Pork CCig Compiler
 
 A browser-based compiler for **Pork CCig**, a cooking-themed, C-like programming language inspired by Filipino sisig.
-![Uploading image.png…]()
 
 
 - **Frontend:** React + Vite
