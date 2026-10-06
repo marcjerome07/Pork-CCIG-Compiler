@@ -1,27 +1,13 @@
 # Pork CCig Compiler
 
-A browser-based compiler for **Pork CCig**, a cooking-themed, C-like programming language inspired by Filipino sisig.
-
-
-- **Frontend:** React + Vite
-- **Compiler logic:** Python
-
-![Pork CCig Compiler interface](docs/screenshot.png)
-
----
-
 ## Quick Start
 
-### 1. Install the requirements
+**Prerequisites**
 
-| Tool | Version | Download |
-|---|---|---|
-| Node.js | 18 or later | https://nodejs.org |
-| Python | 3.10 or later | https://www.python.org |
+- [Node.js](https://nodejs.org) 20.19 or later
+- [Python](https://www.python.org) 3.8 or later (no `pip` packages needed)
 
-Python uses only the standard library, so there is nothing to `pip install`.
-
-### 2. Get the project
+**Install dependencies**
 
 ```bash
 git clone https://github.com/marcjerome07/Pork-CCIG-Compiler.git
@@ -29,9 +15,11 @@ cd Pork-CCIG-Compiler
 npm install
 ```
 
-### 3. Run it (two terminals)
+## Run the Project
 
-**Terminal 1: start the Python lexer server**
+Open two terminals in the project folder.
+
+**Terminal 1: Python lexer server** (runs at `http://127.0.0.1:8000`)
 
 ```bash
 npm run lexer
@@ -39,28 +27,14 @@ npm run lexer
 
 On macOS or Linux, use `python3 backend/server.py` instead.
 
-**Terminal 2: start the web app**
+**Terminal 2: web app**
 
 ```bash
 npm run dev
 ```
 
-### 4. Open the app
+Then open **http://localhost:5173** in your browser.
 
-Go to **http://localhost:5173**, paste some Pork CCig code into the editor, and click **Run**.
+## Current Scope
 
-Keep both terminals open while you use the app. Press `Ctrl + C` in each terminal to stop.
-
----
-
----
-
-## Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| Console says "Cannot reach the Python lexer server" | Start it with `npm run lexer` in another terminal |
-| `'py' is not recognized` | Use `python backend/server.py` (or `python3` on macOS/Linux) |
-| Port 5173 is already in use | Vite picks the next free port; use the URL shown in the terminal |
-
----
+Only lexical analysis is implemented.
