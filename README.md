@@ -1,11 +1,11 @@
 # Pork CCig Compiler
 
 A browser-based compiler for **Pork CCig**, a cooking-themed, C-like programming language inspired by Filipino sisig.
+![Uploading image.png…]()
+
 
 - **Frontend:** React + Vite
 - **Compiler logic:** Python
-- **Course:** CSC 0311 - Automata Theory and Formal Languages, BSCS 4-3, Pamantasan ng Lungsod ng Maynila
-- **Team:** Walang CChan
 
 ---
 
