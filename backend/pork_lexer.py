@@ -5,13 +5,11 @@ reserved words, reserved symbols, identifiers, literals, comments and
 whitespace. It never parses, type-checks or executes the source.
 
 How the specification is applied (decided by the project group):
-  * Transition diagrams (spec pp. 74-83) define the token paths and the
-    delimiter that must follow each token.
+  * Transition diagrams (spec pp. 75-82) define the token paths and the
+    delimiter that must follow each token, including space, tab and newline.
   * Where a diagram contradicts the written rules or regular definitions,
     the written rules win (e.g. escapes start with a backslash, identifiers
     may contain underscores and have up to 20 characters).
-  * Symbols that have no transition diagram are recognized without a
-    delimiter check.
   * Every token listed in the regular-expression table (spec pp. 69-73) is
     reported, including space, newline, tab and comments.
 """
@@ -62,27 +60,50 @@ DELIMITERS = {
     "delim3": (frozenset("{") | WHITESPACE, "{ or whitespace"),
     "delim4": (frozenset("(") | WHITESPACE, "( or whitespace"),
     "delim5": (frozenset(",({;") | WHITESPACE, ", ( { ; or whitespace"),
-    "delim7": (ALPHA_NUM | frozenset("+-!('\"") | WHITESPACE,
+    "delim6": (OPERATORS | frozenset("})]:;,") | WHITESPACE,
+               "operator, } ) ] : ; , or whitespace"),
+    "delim7": (ALPHA_NUM | frozenset("+-!{('\"") | WHITESPACE,
+               "letter, digit, + - ! { ( ' \" or whitespace"),
+    "delim8": (ALPHA_NUM | frozenset("+-!('\"") | WHITESPACE,
                "letter, digit, + - ! ( ' \" or whitespace"),
-    "delim8": (ALPHA_NUM | frozenset("-!('\"") | WHITESPACE,
+    "delim9": (ALPHA_NUM | frozenset("-!('\"") | WHITESPACE,
                "letter, digit, - ! ( ' \" or whitespace"),
-    "delim9": (ALPHA_ID | frozenset("()],;") | WHITESPACE,
-               "letter, digit, _, ( ) ] , ; or whitespace"),
-    "delim10": (ALPHA_NUM | UNDERSCORE | frozenset("+-!(") | WHITESPACE,
+    "delim10": (ALPHA_ID | frozenset("()],;") | WHITESPACE,
+                "letter, digit, _, ( ) ] , ; or whitespace"),
+    "delim11": (ALPHA_NUM | UNDERSCORE | frozenset("+-!(") | WHITESPACE,
                 "letter, digit, _, + - ! ( or whitespace"),
-    "delim11": (ALPHA | UNDERSCORE | frozenset("+!('") | WHITESPACE,
-                "letter, _, + ! ( ' or whitespace"),
-    "delim21": (OPERATORS | frozenset(")]},:;") | WHITESPACE,
+    "delim13": (ALPHA_NUM | frozenset("+-!{(/'\"") | WHITESPACE,
+                "letter, digit, + - ! { ( / ' \" or whitespace"),
+    # The spec writes delim14 as "{ alpha, underscore}, ;, ,, whitespace }";
+    # the stray "}" is read as an allowed character.
+    "delim14": (ALPHA | UNDERSCORE | frozenset("};,") | WHITESPACE,
+                "letter, _, } ; , or whitespace"),
+    "delim15": (ALPHA_NUM | frozenset("-+!()'\"") | WHITESPACE,
+                "letter, digit, - + ! ( ) ' \" or whitespace"),
+    "delim16": (OPERATORS | frozenset("{)[].,:;") | WHITESPACE,
+                "operator, { ) [ ] . , : ; or whitespace"),
+    "delim17": (ALPHA_NUM | frozenset("+-!(]'\"") | WHITESPACE,
+                "letter, digit, + - ! ( ] ' \" or whitespace"),
+    "delim18": (OPERATORS | frozenset(")[],;") | WHITESPACE,
+                "operator, ) [ ] , ; or whitespace"),
+    "delim19": (ALPHA_NUM | frozenset("{+-&'\"") | WHITESPACE,
+                "letter, digit, { + - & ' \" or whitespace"),
+    "delim20": (ALPHA_NUM | frozenset("}+-") | WHITESPACE,
+                "letter, digit, } + - or whitespace"),
+    "delim21": (OPERATORS | frozenset("()[].,;") | WHITESPACE,
+                "operator, ( ) [ ] . , ; or whitespace"),
+    "delim22": (OPERATORS | frozenset(")]},:;") | WHITESPACE,
                 "operator, ) ] } , : ; or whitespace"),
-    "delim22": (OPERATORS | frozenset(")]},;") | WHITESPACE,
-                "operator, ) ] } , ; or whitespace"),
-    "delim23": (frozenset("+><=!&|})],;") | WHITESPACE,
-                "+ > < = ! & | } ) ] , ; or whitespace"),
+    "delim23": (OPERATORS | frozenset("):]},;") | WHITESPACE,
+                "operator, ) : ] } , ; or whitespace"),
+    "delim25": (ALPHA_NUM | OPERATORS | frozenset("{}()[]:;,'\"") | WHITESPACE,
+                "letter, digit, operator, { } ( ) [ ] : ; , ' \" or whitespace"),
+    "alpha_id": (ALPHA_ID, "letter, digit or _"),
 }
 
 # ---------------------------------------------------------------------------
 # Reserved words (spec p. 5-6 for meaning, pp. 69-70 for groups,
-# pp. 74-75 for the delimiter that must follow each word)
+# p. 75 for the delimiter that must follow each word)
 # ---------------------------------------------------------------------------
 
 
@@ -125,8 +146,8 @@ KEYWORDS = (
     Keyword("pork", "Others", "main", "The function where the execution of the program begins.", "delim5"),
     Keyword("serve", "Others", "printf", "A function used to show text or other output on the screen.", "delim4"),
     Keyword("taste", "Others", "scanf", "A function used to receive data entered by the user.", "delim4"),
-    Keyword("yummy", "Others", "true", "A boolean value used to indicate a correct or active condition.", "whitespace"),
-    Keyword("yuck", "Others", "false", "A boolean value used to indicate an incorrect or inactive condition.", "whitespace"),
+    Keyword("yummy", "Others", "true", "A boolean value used to indicate a correct or active condition.", "delim6"),
+    Keyword("yuck", "Others", "false", "A boolean value used to indicate an incorrect or inactive condition.", "delim6"),
     Keyword("fixed", "Others", "const", "A keyword used to keep a variable's value from being changed.", "whitespace"),
 )
 
@@ -136,31 +157,31 @@ KEYWORD_DELIMITER = {kw.word: kw.delimiter for kw in KEYWORDS}
 # Reserved symbols (spec pp. 7-8 and 70-71)
 # ---------------------------------------------------------------------------
 
-# Symbols drawn in the reserved-symbol transition diagram (spec p. 76),
-# with the delimiter that must follow each one.
+# Symbols drawn in the reserved-symbol transition diagrams (spec pp. 76-77),
+# with the delimiter that must follow each one. A lone "|" has no final state.
 DIAGRAM_SYMBOLS = {
     "=": "delim7", "==": "delim8",
     "+": "delim9", "++": "delim10", "+=": "delim11",
-    "-": "delim11", "--": "delim9", "-=": "delim11",
+    "-": "delim11", "--": "delim10", "-=": "delim11",
     "*": "delim11", "*=": "delim11",
     "/": "delim11", "/=": "delim11",
     "%": "delim11", "%=": "delim11",
     ">": "delim8", ">=": "delim8",
     "<": "delim8", "<=": "delim8",
+    "!": "delim8", "!=": "delim8",
+    "&": "delim8", "&&": "delim8", "||": "delim8",
+    "{": "delim13", "}": "delim14",
+    "(": "delim15", ")": "delim16",
+    "[": "delim17", "]": "delim18",
+    ".": "alpha_id", ",": "delim19",
+    ":": "whitespace", ";": "delim20",
 }
 
-# Symbols in the reserved-symbol table that have no transition diagram:
-# recognized without a delimiter check.
-UNCHECKED_SYMBOLS = frozenset({
-    "!=", "&&", "||", "!", "&",
-    "(", ")", "[", "]", "{", "}",
-    ";", ",", ".", ":",
-})
-
 # Longer symbols are tried first so "<=" wins over "<".
-SYMBOLS_LONGEST_FIRST = sorted(
-    set(DIAGRAM_SYMBOLS) | UNCHECKED_SYMBOLS, key=len, reverse=True
-)
+SYMBOLS_LONGEST_FIRST = sorted(DIAGRAM_SYMBOLS, key=len, reverse=True)
+
+# Space, tab and newline are followed by delim25 (spec p. 77).
+WHITESPACE_DELIMITER = "delim25"
 
 # ---------------------------------------------------------------------------
 # Literal and identifier limits (written rules, spec pp. 8-10, October 1, 2026 version)
@@ -321,11 +342,16 @@ class _Lexer:
             ch = self.src[self.i]
             nxt = self.char_at(self.i + 1)
             if ch in WHITESPACE_TOKENS:
-                self.emit(WHITESPACE_TOKENS[ch], self.i + 1)
+                if self.delimiter_ok(self.i + 1, WHITESPACE_DELIMITER):
+                    self.emit(WHITESPACE_TOKENS[ch], self.i + 1)
+                else:
+                    self.delimiter_error(WHITESPACE_TOKENS[ch], self.i + 1, WHITESPACE_DELIMITER)
             elif ch in ALPHA or ch == "_":
                 self.lex_word()
             elif ch in DIGITS or (ch == "-" and nxt is not None and nxt in DIGITS):
                 self.lex_number()
+            elif ch == "." and nxt is not None and nxt in DIGITS:
+                self.lex_leading_point()
             elif ch == "'":
                 self.lex_chop()
             elif ch == '"':
@@ -419,8 +445,8 @@ class _Lexer:
                     f"limit is {MAX_MEAT_DIGITS}.",
                     j,
                 )
-            elif not self.delimiter_ok(j, "delim21"):
-                self.delimiter_error("meat literal", j, "delim21")
+            elif not self.delimiter_ok(j, "delim22"):
+                self.delimiter_error("meat literal", j, "delim22")
             else:
                 self.emit("meat_lit", j)
             return
@@ -441,6 +467,18 @@ class _Lexer:
             self.delimiter_error("sauce literal", j, "delim22")
         else:
             self.emit("sauce_lit", j)
+
+    def lex_leading_point(self):
+        # Sauce rule 7 needs a digit on both sides of the point, so ".5" is an
+        # error even though the diagram draws a "." edge out of state 0.
+        end = self.i + 1
+        while end < self.n and self.src[end] in DIGITS:
+            end += 1
+        self.fail(
+            f"Malformed sauce literal '{self.src[self.i:end]}': a digit is "
+            "required before the decimal point.",
+            end,
+        )
 
     # -- chop and recipe literals ----------------------------------------------
 
@@ -500,8 +538,8 @@ class _Lexer:
                 "it must contain exactly one.",
                 end,
             )
-        elif not self.delimiter_ok(end, "delim21"):
-            self.delimiter_error("chop literal", end, "delim21")
+        elif not self.delimiter_ok(end, "delim22"):
+            self.delimiter_error("chop literal", end, "delim22")
         else:
             self.emit("chop_lit", end)
 
@@ -566,8 +604,8 @@ class _Lexer:
         for symbol in SYMBOLS_LONGEST_FIRST:
             if self.src.startswith(symbol, self.i):
                 end = self.i + len(symbol)
-                delimiter = DIAGRAM_SYMBOLS.get(symbol)
-                if delimiter and not self.delimiter_ok(end, delimiter):
+                delimiter = DIAGRAM_SYMBOLS[symbol]
+                if not self.delimiter_ok(end, delimiter):
                     self.delimiter_error("symbol", end, delimiter)
                 else:
                     self.emit(symbol, end)

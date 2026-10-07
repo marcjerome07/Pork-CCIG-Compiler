@@ -18,8 +18,9 @@ SNIPPETS = {
         "stop again serveback\n"
         "pork serve taste yummy yuck fixed"
     ),
+    # "_count" comes first: delim25 (after whitespace) has no underscore.
     "identifiers": (
-        "age studentName student_name _count score1 "
+        "_count age studentName student_name score1 "
         "meatball format iffy Meat yummy2 abcdefghijklmnopqrst"
     ),
     "literals": (
@@ -35,7 +36,8 @@ SNIPPETS = {
     "symbols": (
         "+ - * / % ++ -- = += -= *= /= %=\n"
         "< > == != <= >= ! && || &\n"
-        "( ) [ ] { } ; , . :"
+        "( ) [ ] { } ; , :\n"
+        "a.b"
     ),
     "longest_match": "x<=y a==b c!=d e&&f g||h i+=j k--",
     "comments": (
@@ -57,7 +59,7 @@ SNIPPETS = {
         "sauce u = 1.2.3;\n"
         "sauce v = 12.;\n"
         "meat n = 123abc;\n"
-        "cooked ok = yummy;\n"
+        "cooked ok = yummy{\n"
         "x = y | z;\n"
         "chop q = 'x\n"
         "/* never closed"
@@ -106,6 +108,15 @@ class KeywordTests(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         self.assertIn("after reserved word 'while'", result.errors[0].message)
 
+    def test_boolean_delimiter_is_delim6(self):
+        for source in ("yummy ", "yuck;", "yummy)", "yuck,", "yummy}", "yuck]", "yummy:",
+                       "yuck==", "yummy!=", "yuck&&", "yummy||", "yuck+"):
+            self.assertEqual(tokenize(source).errors, [], source)
+        for source in ("yummy{", "yuck(", "yummy'a'"):
+            result = tokenize(source)
+            self.assertEqual(len(result.errors), 1, source)
+            self.assertIn("(delim6)", result.errors[0].message)
+
 
 class IdentifierTests(unittest.TestCase):
     def test_identifiers_including_keyword_text(self):
@@ -114,14 +125,35 @@ class IdentifierTests(unittest.TestCase):
         tokens = visible(result)
         self.assertTrue(all(t[0] == "id" for t in tokens))
         self.assertEqual([t[1] for t in tokens], [
-            "age", "studentName", "student_name", "_count", "score1",
+            "_count", "age", "studentName", "student_name", "score1",
             "meatball", "format", "iffy", "Meat", "yummy2", "abcdefghijklmnopqrst",
         ])
 
     def test_identifier_delimiter_follows_diagram(self):
-        result = tokenize("add(a)")
+        for source in ("add(a)", "scores[2]", "b4.title", "x;"):
+            self.assertEqual(tokenize(source).errors, [], source)
+        result = tokenize("{a}")
         self.assertEqual(len(result.errors), 1)
-        self.assertIn("after identifier 'add'", result.errors[0].message)
+        self.assertIn("after identifier 'a'", result.errors[0].message)
+
+
+class DelimiterTableTests(unittest.TestCase):
+    """Delimiter sets and diagram labels from the updated spec (pp. 73-82)."""
+
+    def test_valid_after_symbols_and_literals(self):
+        for source in ("x = {1, 2}", "i++;", "i--;", "x*2", "x+=1", "a == +b", "s = 1.5:",
+                       "case 1:", "case 'A':", 'case "Play":', "if (!done) {",
+                       "taste(\"&d\", &servings);", "scores[2] = 5;", "b4.title"):
+            self.assertEqual(tokenize(source).errors, [], source)
+
+    def test_symbol_and_whitespace_delimiters(self):
+        # Each case is rejected by the delimiter drawn for the symbol before it.
+        for source, delimiter in (("x;;", "delim20"), ("{}", "delim13"), ("a. b", "alpha_id"),
+                                  ("f(_x)", "delim15"), ("a[_i]", "delim17"), ("f(a,_b)", "delim19"),
+                                  ("default:x", "whitespace"), ("meat _count;", "delim25")):
+            result = tokenize(source)
+            self.assertEqual(len(result.errors), 1, source)
+            self.assertIn(f"({delimiter})", result.errors[0].message)
 
 
 class LiteralTests(unittest.TestCase):
@@ -150,6 +182,13 @@ class LiteralTests(unittest.TestCase):
         self.assertEqual(visible(tokenize("999999999999999")), [("meat_lit", "999999999999999", 1, 1)])
         self.assertEqual(visible(tokenize("999999999999.9999999")), [("sauce_lit", "999999999999.9999999", 1, 1)])
 
+    def test_sauce_needs_digit_before_point(self):
+        result = tokenize(".12345;")
+        self.assertEqual([(e.line, e.col) for e in result.errors], [(1, 1)])
+        self.assertIn("digit is required before the decimal point", result.errors[0].message)
+        self.assertIn((";", ";", 1, 7), visible(result))
+        self.assertEqual(tokenize("b4.title").errors, [])
+
     def test_minus_before_digit_is_part_of_literal(self):
         self.assertEqual(visible(tokenize("x-1")), [("id", "x", 1, 1), ("meat_lit", "-1", 1, 2)])
         self.assertEqual(visible(tokenize("x - 1")), [("id", "x", 1, 1), ("-", "-", 1, 3), ("meat_lit", "1", 1, 5)])
@@ -162,7 +201,8 @@ class SymbolTests(unittest.TestCase):
         self.assertEqual([t[0] for t in visible(result)], [
             "+", "-", "*", "/", "%", "++", "--", "=", "+=", "-=", "*=", "/=", "%=",
             "<", ">", "==", "!=", "<=", ">=", "!", "&&", "||", "&",
-            "(", ")", "[", "]", "{", "}", ";", ",", ".", ":",
+            "(", ")", "[", "]", "{", "}", ";", ",", ":",
+            "id", ".", "id",
         ])
 
     def test_longest_match(self):
@@ -210,26 +250,30 @@ class ErrorTests(unittest.TestCase):
         result = tokenize(SNIPPETS["errors"])
         errors = [(e.line, e.col) for e in result.errors]
         self.assertEqual(errors, [
-            (1, 16), (2, 14), (3, 10), (4, 10), (5, 21), (6, 1), (7, 12), (8, 11),
+            (1, 15), (1, 16), (2, 14), (3, 10), (4, 10), (5, 21), (6, 1), (7, 12), (8, 11),
             (9, 11), (10, 11), (11, 11), (12, 10), (13, 13), (14, 7), (15, 10), (16, 1),
         ])
-        messages = [e.message for e in result.errors]
-        self.assertIn("Invalid character '$'", messages[0])
-        self.assertIn("Unterminated recipe literal", messages[1])
-        self.assertIn("exactly one", messages[2])
-        self.assertIn("Empty chop literal", messages[3])
-        self.assertIn(r"Invalid escape '\o'", messages[4])
-        self.assertIn("limit is 20", messages[5])
-        self.assertIn("limit is 15", messages[6])
-        self.assertIn("limit is 12", messages[7])
-        self.assertIn("limit is 7", messages[8])
-        self.assertIn("multiple decimal points", messages[9])
-        self.assertIn("digit is required after the decimal point", messages[10])
-        self.assertIn("Invalid token '123abc'", messages[11])
-        self.assertIn("after reserved word 'yummy'", messages[12])
-        self.assertIn("Invalid character '|'", messages[13])
-        self.assertIn("Unterminated chop literal", messages[14])
-        self.assertIn("Unterminated multi-line comment", messages[15])
+        expected = [
+            "Invalid delimiter '$' after space",  # delim25 has no '$'
+            "Invalid character '$'",
+            "Unterminated recipe literal",
+            "exactly one",
+            "Empty chop literal",
+            r"Invalid escape '\o'",
+            "limit is 20",
+            "limit is 15",
+            "limit is 12",
+            "limit is 7",
+            "multiple decimal points",
+            "digit is required after the decimal point",
+            "Invalid token '123abc'",
+            "after reserved word 'yummy'",
+            "Invalid character '|'",
+            "Unterminated chop literal",
+            "Unterminated multi-line comment",
+        ]
+        for text, error in zip(expected, result.errors):
+            self.assertIn(text, error.message)
         # Recovery: tokens after each error are still produced.
         tokens = visible(result)
         self.assertIn(("meat_lit", "2", 1, 18), tokens)

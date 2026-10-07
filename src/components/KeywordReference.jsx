@@ -57,4 +57,5 @@ export default function KeywordReference() {
       </div>
     </details>
   );
+  // Uncomment the above to show the keywords panel
 }
