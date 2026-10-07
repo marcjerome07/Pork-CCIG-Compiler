@@ -17,6 +17,71 @@ function loadFontSize() {
   return Number.isFinite(saved) ? clampFont(saved) : DEFAULT_FONT;
 }
 
+// Toggles "// " on every line touched by the selection, like VS Code's Ctrl+/.
+// Returns the replacement for text[blockStart, blockEnd) and the new selection.
+function toggleLineComments(text, selStart, selEnd) {
+  const blockStart = selStart === 0 ? 0 : text.lastIndexOf('\n', selStart - 1) + 1;
+  // A selection that ends at the very start of a line does not include that line.
+  const lastPos = selEnd > selStart && text[selEnd - 1] === '\n' ? selEnd - 1 : selEnd;
+  const nextBreak = text.indexOf('\n', lastPos);
+  const blockEnd = nextBreak === -1 ? text.length : nextBreak;
+  const lines = text.slice(blockStart, blockEnd).split('\n');
+
+  const indentOf = (line) => line.length - line.trimStart().length;
+  const filled = lines.filter((line) => line.trim() !== '');
+  const uncomment = filled.length > 0 && filled.every((line) => line.trimStart().startsWith('//'));
+  const commentCol = filled.length ? Math.min(...filled.map(indentOf)) : 0;
+
+  // Per line: where the edit happens, how many characters are removed and the text inserted.
+  const edits = lines.map((line) => {
+    if (uncomment) {
+      if (line.trim() === '') return { col: 0, removed: 0, added: '' };
+      const col = indentOf(line);
+      return { col, removed: line.startsWith('// ', col) ? 3 : 2, added: '' };
+    }
+    if (line.trim() === '' && filled.length) return { col: 0, removed: 0, added: '' };
+    return { col: commentCol, removed: 0, added: '// ' };
+  });
+
+  const replacement = lines
+    .map((line, i) => {
+      const { col, removed, added } = edits[i];
+      return line.slice(0, col) + added + line.slice(col + removed);
+    })
+    .join('\n');
+
+  // Shift an offset in the original text to the matching offset after the edit.
+  // A selection start sitting exactly where "// " goes stays put, so the comment is selected too.
+  const mapPos = (pos, keepAtInsert) => {
+    let lineStart = blockStart;
+    let shift = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const { col, removed, added } = edits[i];
+      const lineEnd = lineStart + lines[i].length;
+      if (pos <= lineEnd) {
+        const c = pos - lineStart;
+        let newC = c;
+        if (c === col && added && keepAtInsert) newC = c;
+        else if (c >= col + removed) newC = c - removed + added.length;
+        else if (c > col) newC = col;
+        return lineStart + shift + newC;
+      }
+      shift += added.length - removed;
+      lineStart = lineEnd + 1;
+    }
+    return pos + shift;
+  };
+
+  const hasSelection = selEnd > selStart;
+  return {
+    blockStart,
+    blockEnd,
+    replacement,
+    selStart: mapPos(selStart, hasSelection),
+    selEnd: mapPos(selEnd, false),
+  };
+}
+
 export default function CodeEditor({ value, onChange, onRun, running }) {
   const [fontSize, setFontSize] = useState(loadFontSize);
   const [caretLine, setCaretLine] = useState(1);
@@ -74,7 +139,11 @@ export default function CodeEditor({ value, onChange, onRun, running }) {
   const insertText = (text) => {
     const ta = textareaRef.current;
     // execCommand keeps the native undo stack intact; fall back if unsupported.
-    if (!document.execCommand?.('insertText', false, text)) {
+    // insertText with an empty string is unreliable, so deletions use "delete".
+    const done = text
+      ? document.execCommand?.('insertText', false, text)
+      : ta.selectionStart === ta.selectionEnd || document.execCommand?.('delete');
+    if (!done) {
       ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, 'end');
       onChange(ta.value);
     }
@@ -95,6 +164,16 @@ export default function CodeEditor({ value, onChange, onRun, running }) {
     if (mod && e.key === '0') {
       e.preventDefault();
       resetZoom();
+      return;
+    }
+    if (mod && (e.key === '/' || e.code === 'Slash')) {
+      e.preventDefault();
+      const ta = textareaRef.current;
+      const edit = toggleLineComments(ta.value, ta.selectionStart, ta.selectionEnd);
+      ta.setSelectionRange(edit.blockStart, edit.blockEnd);
+      insertText(edit.replacement);
+      ta.setSelectionRange(edit.selStart, edit.selEnd);
+      updateCaretLine();
       return;
     }
     if (e.key === 'Escape') {
