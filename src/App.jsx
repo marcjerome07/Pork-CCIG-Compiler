@@ -55,7 +55,9 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1 className="app-title">PORK CCIG Compiler</h1>
+        <h1 className="app-title">
+          <img className="app-logo" src="/logo.png" alt="PORK CCIG Compiler" />
+        </h1>
         <ThemeToggle
           theme={theme}
           onToggle={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))}

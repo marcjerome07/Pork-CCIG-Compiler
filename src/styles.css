@@ -128,6 +128,21 @@ body {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-strong);
+  line-height: 0;
+}
+
+.app-logo {
+  display: block;
+  height: 34px;
+  width: auto;
+}
+
+/* The logo's dark-brown lettering needs a light backing on the dark theme. */
+:root[data-theme='dark'] .app-logo {
+  box-sizing: border-box;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #fffaf3;
 }
 
 .workspace {
