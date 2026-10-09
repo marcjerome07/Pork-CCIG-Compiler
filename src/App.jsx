@@ -9,12 +9,26 @@ import { readStorage, writeStorage } from './storage.js';
 
 const THEME_KEY = 'pork-theme';
 
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
 function summarize(tokens, errors) {
-  const tokenText = `${tokens.length} token${tokens.length === 1 ? '' : 's'}`;
-  const errorText = `${errors.length} lexical error${errors.length === 1 ? '' : 's'}`;
+  const tokenText = plural(tokens.length, 'token');
+  if (errors.length === 0) {
+    return [{ kind: 'ok', text: `Lexical analysis complete: ${tokenText}, 0 errors.` }];
+  }
+  const invalid = errors.filter((e) => e.status === 'Invalid').length;
+  const incomplete = errors.length - invalid;
   return [
-    { kind: errors.length ? 'warn' : 'ok', text: `Lexical analysis finished: ${tokenText}, ${errorText}.` },
-    ...errors.map((e) => ({ kind: 'error', text: `Line ${e.line}, Col ${e.col}: ${e.message}` })),
+    {
+      kind: 'warn',
+      text:
+        `Lexical analysis complete with errors: ${tokenText}, ${plural(errors.length, 'error')} ` +
+        `(${invalid} invalid, ${incomplete} incomplete).`,
+    },
+    ...errors.map((e) => ({
+      kind: 'error',
+      text: `Line ${e.line}, Col ${e.col} — ${e.code} ${e.title}: ${e.message}`,
+    })),
   ];
 }
 

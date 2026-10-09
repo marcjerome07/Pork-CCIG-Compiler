@@ -24,8 +24,8 @@ export default function TokenTable({ tokens }) {
         <table className="token-table">
           <thead>
             <tr>
-              <th scope="col">Token Type</th>
               <th scope="col">Lexeme</th>
+              <th scope="col">Token Type</th>
               <th scope="col">Line</th>
               <th scope="col">Col</th>
             </tr>
@@ -38,8 +38,8 @@ export default function TokenTable({ tokens }) {
             ) : (
               tokens.map((t, i) => (
                 <tr key={i}>
-                  <td>{t.type}</td>
                   <td className="mono lexeme-cell"><Lexeme value={t.lexeme} /></td>
+                  <td>{t.type}</td>
                   <td>{t.line}</td>
                   <td>{t.col}</td>
                 </tr>
