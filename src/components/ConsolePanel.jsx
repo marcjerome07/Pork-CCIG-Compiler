@@ -1,4 +1,4 @@
-export default function ConsolePanel({ lines }) {
+export default function ConsolePanel({ lines, onSelectError }) {
   return (
     <section className="panel console-panel" aria-labelledby="console-title">
       <div className="panel-header">
@@ -8,11 +8,31 @@ export default function ConsolePanel({ lines }) {
         {lines.length === 0 ? (
           <span className="placeholder">Console output will appear here.</span>
         ) : (
-          lines.map((line, i) => (
-            <div key={i} className={`console-line console-${line.kind}`}>
-              {line.text}
-            </div>
-          ))
+          lines.map((line, i) =>
+            line.error && onSelectError ? (
+              // Clicking an error selects its characters in the source code.
+              <div
+                key={i}
+                className={`console-line console-${line.kind} console-link`}
+                role="button"
+                tabIndex={0}
+                title="Show in source code"
+                onClick={() => onSelectError(line.error)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectError(line.error);
+                  }
+                }}
+              >
+                {line.text}
+              </div>
+            ) : (
+              <div key={i} className={`console-line console-${line.kind}`}>
+                {line.text}
+              </div>
+            )
+          )
         )}
       </div>
     </section>
