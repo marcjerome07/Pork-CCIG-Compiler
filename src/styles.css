@@ -26,6 +26,12 @@
   --scroll-thumb-hover: rgba(100, 100, 100, 0.7);
   --row-hover: #f2f2f2;
   --error: #c72e0f;
+  --error-bg: rgba(229, 20, 0, 0.13);
+  --error-bg-strong: rgba(229, 20, 0, 0.26);
+  --token-datatype: #0b3d91;
+  --token-literal: #a87b00;
+  --tooltip-bg: #ffffff;
+  --tooltip-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
   --warn: #8a6100;
   --ok: #2e7d32;
 }
@@ -56,6 +62,12 @@
   --scroll-thumb-hover: rgba(100, 100, 100, 0.7);
   --row-hover: #1a1a1d;
   --error: #f14c4c;
+  --error-bg: rgba(241, 76, 76, 0.2);
+  --error-bg-strong: rgba(241, 76, 76, 0.36);
+  --token-datatype: #6ca6ff;
+  --token-literal: #e5c07b;
+  --tooltip-bg: #1e1e21;
+  --tooltip-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
   --warn: #cca700;
   --ok: #89d185;
 }
@@ -272,6 +284,7 @@ body {
 /* ---------- Code editor ---------- */
 .editor-surface {
   --editor-pad: 8px;
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -331,6 +344,83 @@ body {
 }
 .code-input::selection { background: var(--selection); }
 
+/* ---------- Lexical error highlights ---------- */
+/* Same box, font and padding as .code-input so every character lines up.
+   Only the error marks are visible; the text itself stays transparent. */
+.error-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 100%;
+  margin: 0;
+  padding: var(--editor-pad) 16px calc(var(--editor-pad) + 16px) 4px;
+  white-space: pre;
+  tab-size: 4;
+  color: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+.error-mark {
+  background: var(--error-bg);
+  border-radius: 2px;
+  text-decoration: underline wavy var(--error);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.error-mark.hovered { background: var(--error-bg-strong); }
+
+.char-measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.gutter-line.has-error {
+  position: relative;
+  color: var(--error);
+  font-weight: 700;
+}
+.gutter-line.has-error::after {
+  content: '';
+  position: absolute;
+  right: -11px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+.error-tooltip {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(420px, calc(100% - 24px));
+  padding: 6px 9px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-strong);
+  background: var(--tooltip-bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--error);
+  border-radius: 4px;
+  box-shadow: var(--tooltip-shadow);
+  pointer-events: none;
+}
+.error-tooltip strong { color: var(--error); font-weight: 600; }
+
+.console-link { cursor: pointer; border-radius: 3px; }
+.console-link:hover { text-decoration: underline; }
+.console-link:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 /* ---------- Token table ---------- */
 .token-scroll {
   flex: 1;
@@ -361,6 +451,9 @@ body {
   color: var(--text);
 }
 .token-table tbody tr:hover td { background: var(--row-hover); }
+/* Data-type keywords in blue, literals in yellow (the whole row, like an IDE token view). */
+.token-table tr.token-datatype td { color: var(--token-datatype); font-weight: 600; }
+.token-table tr.token-literal td { color: var(--token-literal); font-weight: 600; }
 .token-table .mono { font-family: var(--mono); }
 .token-table td.empty-row {
   padding: 28px 12px;

@@ -1,6 +1,17 @@
-// Whitespace lexemes are kept as-is in the data; only their display is made visible.
-const WHITESPACE_DISPLAY = { ' ': '·', '\n': '\\n', '\t': '\\t' };
-const WHITESPACE_NAMES = { ' ': 'space', '\n': 'newline', '\t': 'tab' };
+// Whitespace lexemes are kept as-is in the data. Newline and tab are shown as
+// \n and \t; a space is shown as it is (blank).
+const WHITESPACE_DISPLAY = { '\n': '\\n', '\t': '\\t' };
+const WHITESPACE_NAMES = { '\n': 'newline', '\t': 'tab' };
+
+// Rows colored by token type: data types in blue, literals in yellow.
+const DATA_TYPES = new Set(['meat', 'sauce', 'chop', 'recipe', 'cooked', 'empty', 'menu']);
+const LITERALS = new Set(['meat_lit', 'sauce_lit', 'chop_lit', 'recipe_lit']);
+
+function rowClass(type) {
+  if (DATA_TYPES.has(type)) return 'token-datatype';
+  if (LITERALS.has(type)) return 'token-literal';
+  return undefined;
+}
 
 function Lexeme({ value }) {
   if (value in WHITESPACE_DISPLAY) {
@@ -37,7 +48,7 @@ export default function TokenTable({ tokens }) {
               </tr>
             ) : (
               tokens.map((t, i) => (
-                <tr key={i}>
+                <tr key={i} className={rowClass(t.type)}>
                   <td className="mono lexeme-cell"><Lexeme value={t.lexeme} /></td>
                   <td>{t.type}</td>
                   <td>{t.line}</td>

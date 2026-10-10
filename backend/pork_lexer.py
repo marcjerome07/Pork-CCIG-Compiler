@@ -65,6 +65,10 @@ DELIMITERS = {
     "delim8": AN | frozenset("+-!('\"") | WS,
     "delim9": AN | frozenset("-!('\"") | WS,
     "delim10": AI | frozenset("()],;") | WS,
+    # Group decision (deviates from p. 73): "--" may also be followed by a digit
+    # or "-", so "--234" (decrement, then 234) and "---234" (decrement, then -234)
+    # are lexically valid. "++" keeps delim10, so "x++5" is still an error.
+    "delim10_decrement": AI | DIGITS | frozenset("-()],;") | WS,
     "delim11": AN | frozenset("+-!(") | WS,
     "delim13": AN | frozenset("+-!{(/'\"") | WS,
     "delim14": ALPHA | UNDERSCORE | frozenset("};,") | WS,
@@ -147,7 +151,7 @@ KEYWORD_DELIMITER = {kw.word: kw.delimiter for kw in KEYWORDS}
 DIAGRAM_SYMBOLS = {
     "=": "delim7", "==": "delim8",
     "+": "delim9", "++": "delim10", "+=": "delim11",
-    "-": "delim11", "--": "delim10", "-=": "delim11",
+    "-": "delim11", "--": "delim10_decrement", "-=": "delim11",
     "*": "delim11", "*=": "delim11",
     "/": "delim11", "/=": "delim11",
     "%": "delim11", "%=": "delim11",
@@ -190,13 +194,12 @@ TOKEN_TYPES = frozenset(
     + list(OTHER_TOKEN_TYPES)
 )
 
-# Tokens ignored when deciding whether "-" before a digit is a sign or an operator.
+# Whitespace and comments are skipped by the lookback pointer.
 TRIVIA = frozenset([SPACE, NEWLINE, TAB, SINGLE_LINE_COMMENT, MULTI_LINE_COMMENT])
 
-# A "-" right after one of these is subtraction, not the sign of a literal.
-OPERAND_END = frozenset([
-    ID, MEAT_LIT, SAUCE_LIT, CHOP_LIT, RECIPE_LIT, "yummy", "yuck", ")", "]", "++", "--",
-])
+# Minus rule: a "-" whose lookback character ends an operand is subtraction;
+# otherwise a "-" followed by a digit starts a negative literal.
+OPERAND_END_CHARS = ALPHA_NUMERIC | frozenset(")]")
 
 # Characters that can begin some token. Anything else is LEX-901.
 TOKEN_START = (
@@ -217,36 +220,70 @@ MAX_SAUCE_DECIMAL_DIGITS = 7
 # Results
 # ---------------------------------------------------------------------------
 
-# code -> (status, title). "Incomplete": a token was started but a required part
-# is missing. "Invalid": a formed token breaks a rule.
-ERROR_CATALOG = {
-    "LEX-101": ("Invalid", "Invalid numerical value"),
-    "LEX-102": ("Invalid", "Invalid decimal value"),
-    "LEX-103": ("Invalid", "Invalid decimal value"),
-    "LEX-104": ("Incomplete", "Incomplete decimal"),
-    "LEX-105": ("Incomplete", "Incomplete decimal"),
-    "LEX-106": ("Invalid", "Invalid decimal value"),
-    "LEX-107": ("Invalid", "Invalid identifier"),
-    "LEX-108": ("Invalid", "Invalid delimiter"),
-    "LEX-201": ("Incomplete", "Incomplete character literal"),
-    "LEX-202": ("Invalid", "Invalid character literal"),
-    "LEX-203": ("Invalid", "Invalid character literal"),
-    "LEX-204": ("Invalid", "Invalid escape sequence"),
-    "LEX-205": ("Invalid", "Invalid delimiter"),
-    "LEX-206": ("Invalid", "Invalid character literal"),
-    "LEX-301": ("Incomplete", "Incomplete string literal"),
-    "LEX-302": ("Invalid", "Invalid escape sequence"),
-    "LEX-303": ("Invalid", "Invalid delimiter"),
-    "LEX-401": ("Invalid", "Invalid delimiter"),
-    "LEX-501": ("Invalid", "Invalid identifier"),
-    "LEX-502": ("Invalid", "Invalid delimiter"),
-    "LEX-601": ("Incomplete", "Incomplete operator"),
-    "LEX-602": ("Invalid", "Invalid delimiter"),
-    "LEX-701": ("Incomplete", "Incomplete comment"),
-    "LEX-702": ("Invalid", "Invalid comment character"),
-    "LEX-703": ("Invalid", "Invalid delimiter"),
-    "LEX-901": ("Invalid", "Invalid character"),
+# Every lexer message uses one of four status words:
+#   Valid        the lexeme was accepted as a token (token lines in the UI)
+#   Invalid      allowed characters, but malformed or in the wrong place
+#   Unavailable  the character does not exist in the PORK CCIG character set
+#   Available    reserved for later use; no lexical error uses it
+STATUS = {
+    "LEX-101": "Invalid",      # integer longer than 15 digits
+    "LEX-102": "Invalid",      # decimal whole part longer than 12 digits
+    "LEX-103": "Invalid",      # decimal fraction longer than 7 digits
+    "LEX-104": "Invalid",      # no digit after the decimal point
+    "LEX-105": "Invalid",      # no digit before the decimal point
+    "LEX-106": "Invalid",      # second decimal point
+    "LEX-107": "Invalid",      # number followed by a letter (e.g. 2cups)
+    "LEX-108": "Invalid",      # bad delimiter after a number
+    "LEX-201": "Invalid",      # unterminated chop literal
+    "LEX-202": "Invalid",      # empty chop literal ''
+    "LEX-203": "Invalid",      # chop literal with more than one character
+    "LEX-204": "Invalid",      # bad escape in a chop literal
+    "LEX-205": "Invalid",      # bad delimiter after a chop literal
+    "LEX-206": "Invalid",      # chop literal ' ' (a space)
+    "LEX-301": "Invalid",      # unterminated recipe literal
+    "LEX-302": "Invalid",      # bad escape in a recipe literal
+    "LEX-303": "Invalid",      # bad delimiter after a recipe literal
+    "LEX-401": "Invalid",      # bad delimiter after a reserved word
+    "LEX-501": "Invalid",      # identifier longer than 20 characters
+    "LEX-502": "Invalid",      # bad delimiter after an identifier
+    "LEX-601": "Invalid",      # lone "|"
+    "LEX-602": "Invalid",      # bad delimiter after a symbol or whitespace
+    "LEX-701": "Invalid",      # unterminated multi-line comment
+    "LEX-702": "Unavailable",  # character outside the comment character set
+    "LEX-703": "Invalid",      # bad delimiter after a multi-line comment
+    "LEX-901": "Unavailable",  # character not in the PORK CCIG character set (@ $ # ...)
 }
+
+# Short titles for each code (sent to the UI as data; not part of the message).
+TITLES = {
+    "LEX-101": "Numerical value", "LEX-102": "Decimal value", "LEX-103": "Decimal value",
+    "LEX-104": "Decimal value", "LEX-105": "Decimal value", "LEX-106": "Decimal value",
+    "LEX-107": "Identifier", "LEX-108": "Delimiter",
+    "LEX-201": "Character literal", "LEX-202": "Character literal", "LEX-203": "Character literal",
+    "LEX-204": "Escape sequence", "LEX-205": "Delimiter", "LEX-206": "Character literal",
+    "LEX-301": "String literal", "LEX-302": "Escape sequence", "LEX-303": "Delimiter",
+    "LEX-401": "Delimiter", "LEX-501": "Identifier", "LEX-502": "Delimiter",
+    "LEX-601": "Operator", "LEX-602": "Delimiter",
+    "LEX-701": "Comment", "LEX-702": "Comment character", "LEX-703": "Delimiter",
+    "LEX-901": "Character",
+}
+
+# Unterminated literals and comments quote only their first 10 characters.
+SHORTENED_CODES = frozenset(["LEX-201", "LEX-301", "LEX-701"])
+SHORTENED_LENGTH = 10
+
+
+def show_lexeme(lexeme, code=None):
+    """The lexeme as quoted in a message. Newline and tab are written as \\n and
+    \\t; unterminated literals and comments are cut to 10 characters plus "..."."""
+    if code in SHORTENED_CODES and len(lexeme) > SHORTENED_LENGTH:
+        lexeme = lexeme[:SHORTENED_LENGTH] + "..."
+    return lexeme.replace("\n", "\\n").replace("\t", "\\t")
+
+
+def format_message(code, line, col, lexeme):
+    """The one place lexer messages are built: <CODE> (Ln <l>, Col <c>): <STATUS> '<lexeme>'"""
+    return f"{code} (Ln {line}, Col {col}): {STATUS[code]} '{show_lexeme(lexeme, code)}'"
 
 
 @dataclass
@@ -306,18 +343,6 @@ def tokenize(source):
 # ---------------------------------------------------------------------------
 
 
-def _show(ch):
-    """A character as it appears in messages: space, tab, newline, end of input,
-    or the character in quotes."""
-    if ch is None:
-        return "end of input"
-    if ch in WHITESPACE_TOKENS:
-        return WHITESPACE_TOKENS[ch]
-    if 32 <= ord(ch) <= 126:
-        return f"'{ch}'"
-    return f"U+{ord(ch):04X}"
-
-
 class _Lexer:
     def __init__(self, source):
         # Normalize Windows and old Mac line endings so columns stay correct.
@@ -326,13 +351,33 @@ class _Lexer:
         self.i = 0
         self.line = 1
         self.col = 1
-        self.prev = None  # type of the last emitted non-trivia token
+        # Index of the last character of the last token or error that was not
+        # whitespace or a comment; -1 at the start of input. Feeds lookback().
+        self.last_index = -1
         self.result = LexResult()
 
     # -- helpers -------------------------------------------------------------
 
     def char_at(self, index):
-        return self.src[index] if index < self.n else None
+        return self.src[index] if 0 <= index < self.n else None
+
+    # The three pointers: current is src[i]; lookahead peeks src[i + 1] without
+    # consuming it; lookback is the previous non-whitespace character. Both
+    # helpers return '' past either end of the input instead of raising.
+    def current(self):
+        return self.src[self.i] if self.i < self.n else ""
+
+    def lookahead(self):
+        return self.src[self.i + 1] if self.i + 1 < self.n else ""
+
+    def lookback(self):
+        # Spaces, tabs, newlines and comments are skipped, so "x - 234" and
+        # "x /* note */ - 234" both look back to "x".
+        return self.src[self.last_index] if self.last_index >= 0 else ""
+
+    def remember(self, end, is_trivia):
+        if not is_trivia and end > self.i:
+            self.last_index = end - 1
 
     def advance_to(self, end):
         """Consume characters up to (not including) index `end`."""
@@ -348,22 +393,31 @@ class _Lexer:
         if token_type not in TOKEN_TYPES:
             raise AssertionError(f"Unknown token type {token_type!r}; it is not in TOKEN_TYPES.")
         self.result.tokens.append(Token(token_type, self.src[self.i:end], self.line, self.col))
-        if token_type not in TRIVIA:
-            self.prev = token_type
+        self.remember(end, token_type in TRIVIA)
         self.advance_to(end)
 
-    def fail(self, code, message, end):
+    def fail(self, code, end):
         """Report an error covering src[i:end] and resume scanning at `end`."""
-        status, title = ERROR_CATALOG[code]
+        lexeme = self.src[self.i:end]
+        message = format_message(code, self.line, self.col, lexeme)
         self.result.errors.append(
-            LexError(code, status, title, self.line, self.col, self.src[self.i:end], message)
+            LexError(code, STATUS[code], TITLES[code], self.line, self.col, lexeme, message)
         )
+        is_trivia = lexeme.isspace() or lexeme.startswith(("//", "/*"))
+        self.remember(end, is_trivia)
         self.advance_to(end)
 
     def delimiter_ok(self, end, delimiter):
         # End of input is accepted as a delimiter for every token.
         nxt = self.char_at(end)
-        return nxt is None or nxt in DELIMITERS[delimiter]
+        if nxt is None:
+            return True
+        # Group decision: a comment may follow any token directly (comment rule 6,
+        # p. 65), e.g. "x=5;//note", even though most delimiter sets on p. 73 have
+        # no "/". A lone "/" still has to be in the token's delimiter set.
+        if nxt == "/" and self.char_at(end + 1) in ("/", "*"):
+            return True
+        return nxt in DELIMITERS[delimiter]
 
     def find_closing_quote(self, start, quote):
         """Index of the closing quote on the same line, or None. A backslash
@@ -388,24 +442,24 @@ class _Lexer:
     # -- main loop -------------------------------------------------------------
 
     def run(self):
+        # Each pass reads the pointers fresh: i only moves forward inside emit()
+        # and fail() (via advance_to), and both of those also update lookback.
         while self.i < self.n:
-            ch = self.src[self.i]
-            nxt = self.char_at(self.i + 1)
-            nxt_is_digit = nxt is not None and nxt in DIGITS
+            ch = self.current()
+            nxt = self.lookahead()
+            nxt_is_digit = nxt != "" and nxt in DIGITS
             if ch in WHITESPACE_TOKENS:
                 self.lex_whitespace()
             elif ch in ALPHA_ID:
                 self.lex_word()
             elif ch in DIGITS:
                 self.lex_number()
-            elif ch == "-" and nxt_is_digit and self.prev not in OPERAND_END:
-                self.lex_number()  # negative literal, e.g. "x = -5" or "(-1)"
+            elif ch == "-":
+                self.lex_minus(nxt, nxt_is_digit)
             elif ch == "." and nxt_is_digit:
-                self.fail(
-                    "LEX-105",
-                    "A decimal value must have at least one digit before the decimal point.",
-                    self.i + 1,
-                )
+                # ".5": sauce rule 7 needs a digit before the point. One error
+                # for the whole malformed number, e.g. Invalid '.5'.
+                self.fail("LEX-105", self.number_chunk_end(self.i + 1))
             elif ch == "'":
                 self.lex_chop()
             elif ch == '"':
@@ -418,6 +472,22 @@ class _Lexer:
                 self.lex_symbol()
         return self.result
 
+    # -- minus: decrement, subtraction or negative literal --------------------
+
+    def lex_minus(self, lookahead, lookahead_is_digit):
+        # 1. "--" or "-=" (longest match): checked first, so "--234" is a
+        #    decrement followed by 234, never "-" and "-234".
+        if lookahead in ("-", "="):
+            self.lex_symbol()
+        # 2. "-" + digit where the lookback character does not end an operand
+        #    (start of input, an operator, "(", ",", "=", ";", "{", ...):
+        #    a negative literal such as "-234" or "-3.14"; its column is the "-".
+        elif lookahead_is_digit and self.lookback() not in OPERAND_END_CHARS:
+            self.lex_number()
+        # 3. Otherwise plain subtraction or unary minus, e.g. "x-1" or "-x".
+        else:
+            self.lex_symbol()
+
     # -- whitespace ------------------------------------------------------------
 
     def lex_whitespace(self):
@@ -428,7 +498,7 @@ class _Lexer:
         if self.delimiter_ok(end, WHITESPACE_DELIMITER) or nxt not in TOKEN_START:
             self.emit(WHITESPACE_TOKENS[self.src[self.i]], end)
         else:
-            self.fail("LEX-602", f"{_show(nxt)} cannot follow {_show(self.src[self.i])}.", end)
+            self.fail("LEX-602", end)
 
     # -- reserved words and identifiers --------------------------------------
 
@@ -443,35 +513,36 @@ class _Lexer:
             if self.delimiter_ok(end, KEYWORD_DELIMITER[word]):
                 self.emit(word, end)
             else:
-                self.fail(
-                    "LEX-401",
-                    f"{_show(self.char_at(end))} cannot follow the reserved word '{word}'.",
-                    end,
-                )
+                self.fail("LEX-401", end)
             return
 
         if len(word) > MAX_IDENTIFIER_LENGTH:
             cut = self.i + MAX_IDENTIFIER_LENGTH
-            self.fail(
-                "LEX-501",
-                f"'{self.src[self.i:cut]}' exceeds the {MAX_IDENTIFIER_LENGTH}-character "
-                "identifier limit.",
-                cut,
-            )
+            self.fail("LEX-501", cut)
         elif not self.delimiter_ok(end, ID_DELIMITER):
-            self.fail(
-                "LEX-502",
-                f"{_show(self.char_at(end))} cannot follow the identifier '{word}'.",
-                end,
-            )
+            self.fail("LEX-502", end)
         else:
             self.emit(ID, end)
 
     # -- meat and sauce literals -----------------------------------------------
 
+    def number_chunk_end(self, j):
+        """Index of the first delim22 character (or end of input) from j on.
+        "." is not in delim22, so extra decimal points stay inside the chunk."""
+        while j < self.n and self.src[j] not in DELIMITERS[NUMBER_DELIMITER]:
+            j += 1
+        return j
+
     def lex_number(self):
-        """One character of lookahead: the part read so far becomes the error
-        lexeme and scanning restarts at the failing character."""
+        """State machine for meat/sauce literals, one character of lookahead.
+
+        Two kinds of error recovery:
+          * Digit limits (LEX-101/102/103), the professor's rule: the part read
+            so far is the error and scanning restarts at the next character.
+          * Malformed numbers (LEX-104/106/107): the whole chunk up to the next
+            delim22 character is ONE error, e.g. Invalid '12.3.4'. The
+            delimiter itself is never consumed.
+        """
         start = self.i
         j = start + 1 if self.src[start] == "-" else start
         int_start = j
@@ -481,71 +552,44 @@ class _Lexer:
         nxt = self.char_at(j)
 
         if nxt is not None and nxt in DIGITS:
-            self.fail(
-                "LEX-101",
-                f"'{self.src[start:j]}' exceeds the {MAX_MEAT_DIGITS}-digit integer limit.",
-                j,
-            )
+            self.fail("LEX-101", j)
             return
 
         token_type = MEAT_LIT
         if nxt == ".":
             if int_count > MAX_SAUCE_WHOLE_DIGITS:
-                self.fail(
-                    "LEX-102",
-                    f"The whole-number part of '{self.src[start:j]}' exceeds the "
-                    f"{MAX_SAUCE_WHOLE_DIGITS}-digit limit for decimal values.",
-                    j,
-                )
+                self.fail("LEX-102", j)
                 return
             j += 1  # the "."
             nxt = self.char_at(j)
             if nxt is None or nxt not in DIGITS:
-                self.fail(
-                    "LEX-104",
-                    f"'{self.src[start:j]}' must have at least one digit after the decimal point.",
-                    j,
-                )
+                self.fail("LEX-104", self.number_chunk_end(j))  # "5.", "1..2"
                 return
             frac_start = j
             while j < self.n and self.src[j] in DIGITS and j - frac_start < MAX_SAUCE_DECIMAL_DIGITS:
                 j += 1
             nxt = self.char_at(j)
             if nxt is not None and nxt in DIGITS:
-                self.fail(
-                    "LEX-103",
-                    f"The fractional part of '{self.src[start:j]}' exceeds the "
-                    f"{MAX_SAUCE_DECIMAL_DIGITS}-digit limit.",
-                    j,
-                )
+                self.fail("LEX-103", j)
                 return
             if nxt == ".":
-                self.fail(
-                    "LEX-106",
-                    f"'{self.src[start:j]}' cannot contain more than one decimal point.",
-                    j,
-                )
+                self.fail("LEX-106", self.number_chunk_end(j))  # "12.3.4"
                 return
             token_type = SAUCE_LIT
 
-        lexeme = self.src[start:j]
         if nxt is not None and nxt in ALPHA_ID:
-            self.fail(
-                "LEX-107",
-                f"'{lexeme}' is followed by '{nxt}'; identifiers cannot begin with a digit.",
-                j,
-            )
+            self.fail("LEX-107", self.number_chunk_end(j))  # "12abc", "3.14abc"
         elif not self.delimiter_ok(j, NUMBER_DELIMITER):
-            self.fail("LEX-108", f"{_show(nxt)} cannot follow the numeric literal '{lexeme}'.", j)
+            self.fail("LEX-108", j)
         else:
             self.emit(token_type, j)
 
     # -- chop and recipe literals ----------------------------------------------
 
     @staticmethod
-    def literal_body_problem(body, is_valid_char):
-        """Return (char_count, problem). problem is None, ("escape", "\\q") or
-        ("char", c) for a character outside the allowed ASCII range."""
+    def literal_body(body, is_valid_char):
+        """Return (char_count, ok). ok is False on a bad escape (a backslash not
+        followed by n t ' " \\ 0) or a character outside the allowed ASCII range."""
         count = 0
         k = 0
         while k < len(body):
@@ -553,77 +597,49 @@ class _Lexer:
             if ch == "\\":
                 esc = body[k + 1] if k + 1 < len(body) else ""
                 if esc == "" or esc not in ESCAPE_SEQ:
-                    return count, ("escape", "\\" + esc)
+                    return count, False
                 k += 2
             elif is_valid_char(ch):
                 k += 1
             else:
-                return count, ("char", ch)
+                return count, False
             count += 1
-        return count, None
+        return count, True
 
     def lex_chop(self):
         close = self.find_closing_quote(self.i + 1, "'")
         if close is None:
-            self.fail("LEX-201", "Missing closing single quote (').", self.end_of_line(self.i))
+            self.fail("LEX-201", self.end_of_line(self.i))
             return
         end = close + 1
-        lexeme = self.src[self.i:end]
         body = self.src[self.i + 1:close]
         if body == "":
-            self.fail("LEX-202", "A character literal cannot be empty.", end)
+            self.fail("LEX-202", end)
             return
         if body == " ":
-            self.fail("LEX-206", "A chop value cannot be a space.", end)
+            self.fail("LEX-206", end)
             return
-        count, problem = self.literal_body_problem(body, _is_ascii1)
-        if problem and problem[0] == "escape":
-            self.fail("LEX-204", f"'{problem[1]}' is not a valid escape sequence.", end)
-        elif problem:
-            self.fail(
-                "LEX-204",
-                f"{_show(problem[1])} is not a printable ASCII character; it is not allowed "
-                "in a character literal.",
-                end,
-            )
+        count, ok = self.literal_body(body, _is_ascii1)
+        if not ok:
+            self.fail("LEX-204", end)
         elif count != 1:
-            self.fail(
-                "LEX-203",
-                f"{lexeme} contains more than one character; use a recipe (string) instead.",
-                end,
-            )
+            self.fail("LEX-203", end)
         elif not self.delimiter_ok(end, CHOP_DELIMITER):
-            self.fail(
-                "LEX-205",
-                f"{_show(self.char_at(end))} cannot follow the character literal {lexeme}.",
-                end,
-            )
+            self.fail("LEX-205", end)
         else:
             self.emit(CHOP_LIT, end)
 
     def lex_recipe(self):
         close = self.find_closing_quote(self.i + 1, '"')
         if close is None:
-            self.fail("LEX-301", 'Missing closing double quote (").', self.end_of_line(self.i))
+            self.fail("LEX-301", self.end_of_line(self.i))
             return
         end = close + 1
-        lexeme = self.src[self.i:end]
-        _, problem = self.literal_body_problem(self.src[self.i + 1:close], _is_ascii2)
-        if problem and problem[0] == "escape":
-            self.fail("LEX-302", f"'{problem[1]}' is not a valid escape sequence in {lexeme}.", end)
-        elif problem:
-            self.fail(
-                "LEX-302",
-                f"{_show(problem[1])} is not a printable ASCII character; it is not allowed "
-                f"in {lexeme}.",
-                end,
-            )
+        _, ok = self.literal_body(self.src[self.i + 1:close], _is_ascii2)
+        if not ok:
+            self.fail("LEX-302", end)
         elif not self.delimiter_ok(end, RECIPE_DELIMITER):
-            self.fail(
-                "LEX-303",
-                f"{_show(self.char_at(end))} cannot follow the string literal {lexeme}.",
-                end,
-            )
+            self.fail("LEX-303", end)
         else:
             self.emit(RECIPE_LIT, end)
 
@@ -635,29 +651,25 @@ class _Lexer:
         for k in range(self.i + 2, end):
             ch = self.src[k]
             if not (_is_ascii3(ch) or ch == "\t"):
-                self.fail("LEX-702", f"{_show(ch)} is not allowed inside a comment.", end)
+                self.fail("LEX-702", end)
                 return
         self.emit(SINGLE_LINE_COMMENT, end)
 
     def lex_multi_line_comment(self):
         close = self.src.find("*/", self.i + 2)
         if close == -1:
-            self.fail("LEX-701", "Multi-line comment is missing its closing '*/'.", self.n)
+            self.fail("LEX-701", self.n)
             return
         end = close + 2
         for k in range(self.i + 2, close):
             ch = self.src[k]
             if not (_is_ascii4(ch) or ch in WHITESPACE):
-                self.fail("LEX-702", f"{_show(ch)} is not allowed inside a comment.", end)
+                self.fail("LEX-702", end)
                 return
         if self.delimiter_ok(end, MULTI_LINE_COMMENT_DELIMITER):
             self.emit(MULTI_LINE_COMMENT, end)
         else:
-            self.fail(
-                "LEX-703",
-                f"{_show(self.char_at(end))} cannot follow a multi-line comment.",
-                end,
-            )
+            self.fail("LEX-703", end)
 
     # -- reserved symbols ----------------------------------------------------------
 
@@ -668,18 +680,10 @@ class _Lexer:
                 if self.delimiter_ok(end, DIAGRAM_SYMBOLS[symbol]):
                     self.emit(symbol, end)
                 else:
-                    self.fail(
-                        "LEX-602",
-                        f"{_show(self.char_at(end))} cannot follow '{symbol}'.",
-                        end,
-                    )
+                    self.fail("LEX-602", end)
                 return
         ch = self.src[self.i]
         if ch == "|":
-            self.fail(
-                "LEX-601",
-                "'|' must be followed by '|' to form the logical OR operator (||).",
-                self.i + 1,
-            )
+            self.fail("LEX-601", self.i + 1)
         else:
-            self.fail("LEX-901", f"{_show(ch)} is not a valid character.", self.i + 1)
+            self.fail("LEX-901", self.i + 1)
