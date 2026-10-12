@@ -84,8 +84,6 @@ DELIM = {
     "delim8": AN + "+-!('\"" + WS,
     "delim9": AN + "-!('\"" + WS,
     "delim10": AI + "()],;" + WS,
-    # Group decision: "--" may also be followed by a digit or "-" ("--234", "---234").
-    "delim10_decrement": AI + DIGITS + "-()],;" + WS,
     "delim11": AN + "+-!(" + WS,
     "delim13": AN + "+-!{(/'\"" + WS,
     "delim14": ALPHA + "_};," + WS,
@@ -114,7 +112,7 @@ KEYWORD_DELIM = {
 
 SYMBOL_DELIM = {
     "=": "delim7", "==": "delim8", "+": "delim9", "++": "delim10", "+=": "delim11",
-    "-": "delim11", "--": "delim10_decrement", "-=": "delim11", "*": "delim11", "*=": "delim11",
+    "-": "delim11", "--": "delim10", "-=": "delim11", "*": "delim11", "*=": "delim11",
     "/": "delim11", "/=": "delim11", "%": "delim11", "%=": "delim11",
     ">": "delim8", ">=": "delim8", "<": "delim8", "<=": "delim8",
     "!": "delim8", "!=": "delim8", "&": "delim8", "&&": "delim8", "||": "delim8",
@@ -294,11 +292,13 @@ class BoundaryTests(unittest.TestCase):
             ], source)
 
     def test_sauce_whole_part(self):
-        for n in (11, 12):
+        # Sauce rule 8 (October 16, 2026 version): up to 15 whole digits.
+        for n in (13, 14, 15):
             source = "9" * n + ".5"
             self.assertEqual(items(lex(source)), [("sauce_lit", source, 1, 1)], source)
-        self.assertEqual(items(lex("9" * 13 + ".5")), [
-            ("LEX-102", "9" * 13, 1, 1), ("LEX-105", ".5", 1, 14),
+        # A 16th digit hits the 15-digit limit first (LEX-101, professor's restart rule).
+        self.assertEqual(items(lex("9" * 16 + ".5")), [
+            ("LEX-101", "9" * 15, 1, 1), ("sauce_lit", "9.5", 1, 16),
         ])
 
     def test_sauce_fraction(self):
@@ -340,7 +340,6 @@ class BoundaryTests(unittest.TestCase):
 class ErrorMessageTests(unittest.TestCase):
     CASES = (
         ("1234567890123456", "LEX-101 (Ln 1, Col 1): Invalid '123456789012345'"),
-        ("1234567890123.5", "LEX-102 (Ln 1, Col 1): Invalid '1234567890123'"),
         ("1.12345678", "LEX-103 (Ln 1, Col 1): Invalid '1.1234567'"),
         ("5.", "LEX-104 (Ln 1, Col 1): Invalid '5.'"),
         (".5", "LEX-105 (Ln 1, Col 1): Invalid '.5'"),
@@ -464,9 +463,7 @@ class RequiredCaseTests(unittest.TestCase):
         ("sauce a = 12345678900000000.1234567890000",
          [("LEX-101", "123456789000000", 11), ("LEX-103", "00.1234567", 26), ("meat_lit", "890000", 36)],
          ["LEX-101", "LEX-103"]),
-        ("sauce a = 1234567890000.1",
-         [("LEX-102", "1234567890000", 11), ("LEX-105", ".1", 24)],
-         ["LEX-102", "LEX-105"]),
+        ("sauce a = 1234567890000.1", [("sauce_lit", "1234567890000.1", 11)], []),
         ("sauce a = 123456789000.12345678",
          [("LEX-103", "123456789000.1234567", 11), ("meat_lit", "8", 31)], ["LEX-103"]),
         ("sauce a = 5.;", [("LEX-104", "5.", 11), (";", ";", 13)], ["LEX-104"]),

@@ -16,8 +16,6 @@ from test_lexer import assert_full_coverage
 # (source, expected non-whitespace tokens as (type, lexeme, col)), all on line 1.
 CASES = (
     ("-234", [("meat_lit", "-234", 1)]),
-    ("--234", [("--", "--", 1), ("meat_lit", "234", 3)]),
-    ("---234", [("--", "--", 1), ("meat_lit", "-234", 3)]),
     ("x-234", [("id", "x", 1), ("-", "-", 2), ("meat_lit", "234", 3)]),
     ("x - 234", [("id", "x", 1), ("-", "-", 3), ("meat_lit", "234", 5)]),
     ("x = -234", [("id", "x", 1), ("=", "=", 3), ("meat_lit", "-234", 5)]),
@@ -58,9 +56,21 @@ class MinusRuleTests(unittest.TestCase):
     def test_minus_assign_is_longest_match(self):
         self.assertEqual(visible(tokenize("x-=1")), [("id", "x", 1), ("-=", "-=", 2), ("meat_lit", "1", 4)])
 
-    def test_increment_keeps_doc_delimiter(self):
-        # Only "--" got the exception; "++" still follows delim10 (p. 73).
-        self.assertEqual([e.code for e in tokenize("x++5").errors], ["LEX-602"])
+    def test_literal_after_increment_or_decrement_is_an_error(self):
+        # "++" and "--" both follow delim10 (p. 73): no digit or "-" may follow,
+        # which matches unary rule 8 (a literal cannot be incremented/decremented).
+        cases = (
+            ("x++5", [("id", "x", 1), ("LEX-602", "++", 2), ("meat_lit", "5", 4)]),
+            ("--234", [("LEX-602", "--", 1), ("meat_lit", "234", 3)]),
+            ("---234", [("LEX-602", "--", 1), ("meat_lit", "-234", 3)]),
+            ("1234--567.99", [("meat_lit", "1234", 1), ("LEX-602", "--", 5), ("sauce_lit", "567.99", 7)]),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                result = tokenize(source)
+                assert_full_coverage(source, result)
+                found = visible(result) + [(e.code, e.lexeme, e.col) for e in result.errors]
+                self.assertEqual(sorted(found, key=lambda x: x[2]), expected)
 
 
 if __name__ == "__main__":

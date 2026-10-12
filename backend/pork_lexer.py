@@ -65,10 +65,6 @@ DELIMITERS = {
     "delim8": AN | frozenset("+-!('\"") | WS,
     "delim9": AN | frozenset("-!('\"") | WS,
     "delim10": AI | frozenset("()],;") | WS,
-    # Group decision (deviates from p. 73): "--" may also be followed by a digit
-    # or "-", so "--234" (decrement, then 234) and "---234" (decrement, then -234)
-    # are lexically valid. "++" keeps delim10, so "x++5" is still an error.
-    "delim10_decrement": AI | DIGITS | frozenset("-()],;") | WS,
     "delim11": AN | frozenset("+-!(") | WS,
     "delim13": AN | frozenset("+-!{(/'\"") | WS,
     "delim14": ALPHA | UNDERSCORE | frozenset("};,") | WS,
@@ -151,7 +147,7 @@ KEYWORD_DELIMITER = {kw.word: kw.delimiter for kw in KEYWORDS}
 DIAGRAM_SYMBOLS = {
     "=": "delim7", "==": "delim8",
     "+": "delim9", "++": "delim10", "+=": "delim11",
-    "-": "delim11", "--": "delim10_decrement", "-=": "delim11",
+    "-": "delim11", "--": "delim10", "-=": "delim11",
     "*": "delim11", "*=": "delim11",
     "/": "delim11", "/=": "delim11",
     "%": "delim11", "%=": "delim11",
@@ -213,7 +209,7 @@ TOKEN_START = (
 
 MAX_IDENTIFIER_LENGTH = 20
 MAX_MEAT_DIGITS = 15
-MAX_SAUCE_WHOLE_DIGITS = 12
+MAX_SAUCE_WHOLE_DIGITS = 15  # sauce rule 8 (October 16, 2026 version); was 12
 MAX_SAUCE_DECIMAL_DIGITS = 7
 
 # ---------------------------------------------------------------------------
@@ -557,6 +553,8 @@ class _Lexer:
 
         token_type = MEAT_LIT
         if nxt == ".":
+            # With both limits at 15 this can't trigger (a 16th digit is LEX-101
+            # first); it stays in case the sauce limit is set lower again.
             if int_count > MAX_SAUCE_WHOLE_DIGITS:
                 self.fail("LEX-102", j)
                 return
