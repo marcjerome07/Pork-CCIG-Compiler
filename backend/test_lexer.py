@@ -134,7 +134,7 @@ SYMBOL_MUNCH = {
     ">": "=", "<": "=", "!": "=", "&": "&",
 }
 
-# Characters that cannot start any token (they are LEX-901).
+# Characters that cannot start any token (LEX-901, or LEX-902 for $ ? @ ^).
 NO_TOKEN_START = "@$#`~?^\\"
 
 NEXT_CHARS = [chr(c) for c in range(32, 127)] + ["\t", "\n"]
@@ -217,7 +217,7 @@ class TokenRecognitionTests(unittest.TestCase):
     def test_errors_are_never_tokens(self):
         result = lex("meat x = 5 @ 3;")
         self.assertNotIn("@", [t.lexeme for t in result.tokens])
-        self.assertEqual(codes(result), ["LEX-901"])
+        self.assertEqual(codes(result), ["LEX-902"])
 
     def test_comment_may_follow_any_token(self):
         # Group decision: "//" or "/*" right after a token is always allowed.
@@ -268,7 +268,7 @@ class DelimiterMatrixTests(unittest.TestCase):
         self.check("", '"s"', "recipe_lit", DELIM["delim23"])
 
     def test_space(self):
-        # A character that starts no token is reported once as LEX-901, so the
+        # A character that starts no token is reported once (LEX-901/902), so the
         # space before it is still a valid token.
         self.check("x", " ", "space", DELIM["delim25"] + NO_TOKEN_START)
 
@@ -302,9 +302,9 @@ class BoundaryTests(unittest.TestCase):
         for n in (13, 14, 15):
             source = "9" * n + ".5"
             self.assertEqual(items(lex(source)), [("sauce_lit", source, 1, 1)], source)
-        # A 16th digit hits the 15-digit limit first (LEX-101, professor's restart rule).
+        # A 16th whole digit is LEX-102 (professor's restart rule).
         self.assertEqual(items(lex("9" * 16 + ".5")), [
-            ("LEX-101", "9" * 15, 1, 1), ("sauce_lit", "9.5", 1, 16),
+            ("LEX-102", "9" * 15, 1, 1), ("sauce_lit", "9.5", 1, 16),
         ])
 
     def test_sauce_fraction(self):
@@ -338,72 +338,88 @@ class BoundaryTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Error messages: <CODE> (Ln <line>, Col <col>): <STATUS> '<lexeme>'
-# Only the status words Valid, Invalid, Available and Unavailable are used.
+# Error messages: Line <n>, Col <n>: <Error message> '<lexeme>'
 # ---------------------------------------------------------------------------
 
 
 class ErrorMessageTests(unittest.TestCase):
     CASES = (
-        ("1234567890123456", "LEX-101 (Ln 1, Col 1): Invalid '123456789012345'"),
-        ("1.12345678", "LEX-103 (Ln 1, Col 1): Invalid '1.1234567'"),
-        ("5.", "LEX-104 (Ln 1, Col 1): Invalid '5.'"),
-        (".5", "LEX-105 (Ln 1, Col 1): Invalid '.5'"),
-        ("1.5.2", "LEX-106 (Ln 1, Col 1): Invalid '1.5.2'"),
-        ("12abc", "LEX-107 (Ln 1, Col 1): Invalid '12abc'"),
-        ("5{", "LEX-108 (Ln 1, Col 1): Invalid '5'"),
-        ("'a", "LEX-201 (Ln 1, Col 1): Invalid ''a'"),
-        ("''", "LEX-202 (Ln 1, Col 1): Invalid ''''"),
-        ("'ab'", "LEX-203 (Ln 1, Col 1): Invalid ''ab''"),
-        ("'\\q'", "LEX-204 (Ln 1, Col 1): Invalid ''\\q''"),
-        ("'a'x", "LEX-205 (Ln 1, Col 1): Invalid ''a''"),
-        ('"ab', "LEX-301 (Ln 1, Col 1): Invalid '\"ab'"),
-        ('"a\\qb"', "LEX-302 (Ln 1, Col 1): Invalid '\"a\\qb\"'"),
-        ('"s"x', "LEX-303 (Ln 1, Col 1): Invalid '\"s\"'"),
-        ("meat;", "LEX-401 (Ln 1, Col 1): Invalid 'meat'"),
-        ("a" * 21, "LEX-501 (Ln 1, Col 1): Invalid '" + "a" * 20 + "'"),
-        ("a{", "LEX-502 (Ln 1, Col 1): Invalid 'a'"),
-        ("|", "LEX-601 (Ln 1, Col 1): Invalid '|'"),
-        (";;", "LEX-602 (Ln 1, Col 1): Invalid ';'"),
-        ("x .", "LEX-602 (Ln 1, Col 2): Invalid ' '"),
-        ("/* a", "LEX-701 (Ln 1, Col 1): Invalid '/* a'"),
-        ("// caf\u00e9", "LEX-702 (Ln 1, Col 1): Unavailable '// caf\u00e9'"),
-        ("/* a */x", "LEX-703 (Ln 1, Col 1): Invalid '/* a */'"),
-        ("@", "LEX-901 (Ln 1, Col 1): Unavailable '@'"),
-        ("meat x;\n  $", "LEX-901 (Ln 2, Col 3): Unavailable '$'"),
+        # MEAT
+        ("12a", "Line 1, Col 1: Invalid numerical value '12a'"),
+        ("1234567890123456", "Line 1, Col 1: Meat value exceeds 15 digits '123456789012345'"),
+        # SAUCE
+        ("12.", "Line 1, Col 1: Incomplete decimal value '12.'"),
+        (".5", "Line 1, Col 1: Incomplete decimal value '.5'"),
+        ("1.2.3", "Line 1, Col 1: Multiple decimal points '1.2.3'"),
+        ("1..2", "Line 1, Col 1: Multiple decimal points '1..2'"),
+        ("1234567890123456.5", "Line 1, Col 1: Sauce whole part exceeds 15 digits '123456789012345'"),
+        ("1.12345678", "Line 1, Col 1: Sauce decimal part exceeds 7 digits '1.1234567'"),
+        # CHOP
+        ("''", "Line 1, Col 1: Empty character value ''''"),
+        ("'a", "Line 1, Col 1: Unclosed character value ''a'"),
+        ("'ab'", "Line 1, Col 1: Too many characters in chop value ''ab''"),
+        ("'\\q'", "Line 1, Col 1: Invalid escape sequence ''\\q''"),
+        # RECIPE
+        ('"Hello', "Line 1, Col 1: Unclosed string value '\"Hello'"),
+        ('"Good M\\orning"', "Line 1, Col 1: Invalid escape sequence '\"Good M\\orning\"'"),
+        # COOKED
+        ("yummy(1)", "Line 1, Col 1: Invalid boolean value 'yummy'"),
+        ("yuck{", "Line 1, Col 1: Invalid boolean value 'yuck'"),
+        # IDENTIFIER
+        ("a" * 21, "Line 1, Col 1: Identifier exceeds 20 characters '" + "a" * 20 + "'"),
+        ("a$b", "Line 1, Col 1: Invalid identifier 'a$b'"),
+        ("x#1y", "Line 1, Col 1: Invalid identifier 'x#1y'"),
+        # GENERAL
+        ("@", "Line 1, Col 1: Unavailable character '@'"),
+        ("meat x;\n  $", "Line 2, Col 3: Unavailable character '$'"),
+        ("chop c = '?';", "Line 1, Col 11: Unavailable character '?'"),
+        ("#", "Line 1, Col 1: Invalid character '#'"),
+        ("|", "Line 1, Col 1: Invalid character '|'"),
+        ("// café", "Line 1, Col 7: Invalid character 'é'"),
+        ("'a'x", "Line 1, Col 1: Invalid delimiter ''a''"),
+        ('"s"x', "Line 1, Col 1: Invalid delimiter '\"s\"'"),
+        ("5{", "Line 1, Col 1: Invalid delimiter '5'"),
+        ("meat;", "Line 1, Col 1: Invalid delimiter 'meat'"),
+        ("a{", "Line 1, Col 1: Invalid delimiter 'a'"),
+        (";;", "Line 1, Col 1: Invalid delimiter ';'"),
+        ("x .", "Line 1, Col 2: Invalid delimiter ' '"),
+        ("/* a */x", "Line 1, Col 1: Invalid delimiter '/* a */'"),
+        # Comments (not in the list): unclosed multi-line comment
+        ("/* a", "Line 1, Col 1: Unclosed comment '/* a'"),
     )
 
     def test_messages(self):
         for source, message in self.CASES:
             with self.subTest(source=source):
-                self.assertEqual(lex(source).errors[0].message, message)
+                errors = lex(source).errors
+                self.assertEqual(len(errors), 1, [e.message for e in errors])
+                self.assertEqual(errors[0].message, message)
 
-    def test_status_field_uses_only_the_four_words(self):
-        unavailable = {"LEX-702", "LEX-901"}
+    def test_status_counts_unavailable_separately(self):
         for source, _ in self.CASES:
             error = lex(source).errors[0]
-            expected = "Unavailable" if error.code in unavailable else "Invalid"
+            expected = "Unavailable" if error.code == "LEX-902" else "Invalid"
             self.assertEqual(error.status, expected, source)
 
     def test_unterminated_literals_and_comments_are_shortened(self):
         # The first 10 characters of the lexeme, then "..."; 10 or fewer stay whole.
         self.assertEqual(lex('"Hello there, friend').errors[0].message,
-                         "LEX-301 (Ln 1, Col 1): Invalid '\"Hello the...'")
+                         "Line 1, Col 1: Unclosed string value '\"Hello the...'")
         self.assertEqual(lex("'abcdefghijklmn").errors[0].message,
-                         "LEX-201 (Ln 1, Col 1): Invalid ''abcdefghi...'")
+                         "Line 1, Col 1: Unclosed character value ''abcdefghi...'")
         self.assertEqual(lex("/* never closed\nstill").errors[0].message,
-                         "LEX-701 (Ln 1, Col 1): Invalid '/* never c...'")
+                         "Line 1, Col 1: Unclosed comment '/* never c...'")
         self.assertEqual(lex('"123456789').errors[0].message,
-                         "LEX-301 (Ln 1, Col 1): Invalid '\"123456789'")
+                         "Line 1, Col 1: Unclosed string value '\"123456789'")
 
     def test_newline_and_tab_are_written_as_escapes(self):
-        self.assertEqual(lex("x\n.").errors[0].message, "LEX-602 (Ln 1, Col 2): Invalid '\\n'")
-        self.assertEqual(lex("x\t.").errors[0].message, "LEX-602 (Ln 1, Col 2): Invalid '\\t'")
+        self.assertEqual(lex("x\n.").errors[0].message, "Line 1, Col 2: Invalid delimiter '\\n'")
+        self.assertEqual(lex("x\t.").errors[0].message, "Line 1, Col 2: Invalid delimiter '\\t'")
 
-    def test_no_trailing_period_or_extra_words(self):
+    def test_format(self):
         for source, _ in self.CASES:
             message = lex(source).errors[0].message
-            self.assertRegex(message, r"^LEX-\d{3} \(Ln \d+, Col \d+\): (Invalid|Unavailable) '.*'$")
+            self.assertRegex(message, r"^Line \d+, Col \d+: [A-Z][a-z0-9 ]+ '.*'$")
 
 
 # ---------------------------------------------------------------------------
@@ -466,8 +482,8 @@ class RequiredCaseTests(unittest.TestCase):
     CASES = (
         ("sauce a = 123456789000.1234567", [("sauce_lit", "123456789000.1234567", 11)], []),
         ("sauce a = 12345678900000000.1234567890000",
-         [("LEX-101", "123456789000000", 11), ("LEX-103", "00.1234567", 26), ("meat_lit", "890000", 36)],
-         ["LEX-101", "LEX-103"]),
+         [("LEX-102", "123456789000000", 11), ("LEX-103", "00.1234567", 26), ("meat_lit", "890000", 36)],
+         ["LEX-102", "LEX-103"]),
         ("sauce a = 1234567890000.1", [("sauce_lit", "1234567890000.1", 11)], []),
         ("sauce a = 123456789000.12345678",
          [("LEX-103", "123456789000.1234567", 11), ("meat_lit", "8", 31)], ["LEX-103"]),
@@ -498,7 +514,7 @@ class RequiredCaseTests(unittest.TestCase):
         ('recipe s = "hello;', [("LEX-301", '"hello;', 12)], ["LEX-301"]),
         ('recipe s = "Good M\\orning";', [("LEX-302", '"Good M\\orning"', 12), (";", ";", 27)], ["LEX-302"]),
         ("a | b", [("id", "a", 1), ("LEX-601", "|", 3), ("id", "b", 5)], ["LEX-601"]),
-        ("meat x = 5 @ 3;", [("LEX-901", "@", 12), ("meat_lit", "3", 14), (";", ";", 15)], ["LEX-901"]),
+        ("meat x = 5 @ 3;", [("LEX-902", "@", 12), ("meat_lit", "3", 14), (";", ";", 15)], ["LEX-902"]),
         ("/* comment", [("LEX-701", "/* comment", 1)], ["LEX-701"]),
         ("cooked ok = true;", [("id", "true", 13)], []),
         ("meat price = 150; // note", [("Single-Line Comment", "// note", 19)], []),
@@ -569,7 +585,7 @@ class IdentifierNumberTests(unittest.TestCase):
 
     def test_errors_use_no_number(self):
         result = lex("meat abcdefghijklmnopqrstu = 1; a$b; c;")
-        self.assertEqual(result.symbols, {"u": 1, "b": 2, "c": 3})
+        self.assertEqual(result.symbols, {"u": 1, "c": 2})
 
     def test_reset_for_each_input(self):
         lex("meat a; meat b;")
@@ -590,14 +606,14 @@ class UnavailableCharacterTests(unittest.TestCase):
 
     def test_inside_literals_and_comments(self):
         cases = (
-            ("chop c = '$';", "'$'", "LEX-902 (Ln 1, Col 11): Unavailable '$' (ASCII 36)"),
-            ("chop c = '?';", "'?'", "LEX-902 (Ln 1, Col 11): Unavailable '?' (ASCII 63)"),
-            ('recipe s = "Hi @ there";', '"Hi @ there"', "LEX-902 (Ln 1, Col 16): Unavailable '@' (ASCII 64)"),
-            ('recipe s = "2^3";', '"2^3"', "LEX-902 (Ln 1, Col 14): Unavailable '^' (ASCII 94)"),
-            ("// is this valid?", "// is this valid?", "LEX-902 (Ln 1, Col 17): Unavailable '?' (ASCII 63)"),
-            ("/* price in $ */", "/* price in $ */", "LEX-902 (Ln 1, Col 13): Unavailable '$' (ASCII 36)"),
+            ("chop c = '$';", "'$'", "Line 1, Col 11: Unavailable character '$'"),
+            ("chop c = '?';", "'?'", "Line 1, Col 11: Unavailable character '?'"),
+            ('recipe s = "Hi @ there";', '"Hi @ there"', "Line 1, Col 16: Unavailable character '@'"),
+            ('recipe s = "2^3";', '"2^3"', "Line 1, Col 14: Unavailable character '^'"),
+            ("// is this valid?", "// is this valid?", "Line 1, Col 17: Unavailable character '?'"),
+            ("/* price in $ */", "/* price in $ */", "Line 1, Col 13: Unavailable character '$'"),
             ("/* line one\n  cost $5 */", "/* line one\n  cost $5 */",
-             "LEX-902 (Ln 2, Col 8): Unavailable '$' (ASCII 36)"),
+             "Line 2, Col 8: Unavailable character '$'"),
         )
         for source, lexeme, message in cases:
             with self.subTest(source=source):
@@ -609,15 +625,14 @@ class UnavailableCharacterTests(unittest.TestCase):
         self.assertEqual(items(lex("chop c = '$';"))[-1], (";", ";", 1, 13))
 
     def test_from_state_zero(self):
-        self.assertEqual(raw(lex("?"))[1], [("LEX-901", "LEX-901 (Ln 1, Col 1): Unavailable '?'")])
+        self.assertEqual(raw(lex("?"))[1], [("LEX-902", "Line 1, Col 1: Unavailable character '?'")])
         result = lex("meat x;\n?\nx = 1;")
-        self.assertEqual(raw(result)[1], [("LEX-901", "LEX-901 (Ln 2, Col 1): Unavailable '?'")])
+        self.assertEqual(raw(result)[1], [("LEX-902", "Line 2, Col 1: Unavailable character '?'")])
 
     def test_identifier_followed_by_unavailable(self):
         self.assertEqual(raw(lex("meat a$b = 1;")), (
-            [("meat", "meat", 1), ("id1", "b", 8), ("=", "=", 10), ("meat_lit", "1", 12), (";", ";", 13)],
-            [("LEX-502", "LEX-502 (Ln 1, Col 6): Invalid 'a'"),
-             ("LEX-901", "LEX-901 (Ln 1, Col 7): Unavailable '$'")],
+            [("meat", "meat", 1), ("=", "=", 10), ("meat_lit", "1", 12), (";", ";", 13)],
+            [("LEX-503", "Line 1, Col 6: Invalid identifier 'a$b'")],
         ))
 
     def test_hash_still_valid(self):

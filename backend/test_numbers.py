@@ -34,7 +34,7 @@ CASES = (
     ("5.;", [("LEX-104", "5.", 1), (";", ";", 3)]),
     ("3.14abc", [("LEX-107", "3.14abc", 1)]),
     ("12abc", [("LEX-107", "12abc", 1)]),
-    ("1..2", [("LEX-104", "1..2", 1)]),
+    ("1..2", [("LEX-106", "1..2", 1)]),
     (".5", [("LEX-105", ".5", 1)]),                       # sauce rule 7
     (".5;", [("LEX-105", ".5", 1), (";", ";", 3)]),
     ("-12abc;", [("LEX-107", "-12abc", 1), (";", ";", 7)]),
@@ -46,7 +46,7 @@ CASES = (
     ("1234567890000.1", [("sauce_lit", "1234567890000.1", 1)]),
     ("0000000000000.1", [("sauce_lit", "0000000000000.1", 1)]),  # doc table still says invalid
     ("123456789012345.5", [("sauce_lit", "123456789012345.5", 1)]),
-    ("1234567890123456.5", [("LEX-101", "123456789012345", 1), ("sauce_lit", "6.5", 16)]),
+    ("1234567890123456.5", [("LEX-102", "123456789012345", 1), ("sauce_lit", "6.5", 16)]),
     ("12345678.87654321", [("LEX-103", "12345678.8765432", 1), ("meat_lit", "1", 17)]),
     # "-" then ".": the document's delim11 has no ".", so the "-" is also an error.
     ("-.5", [("LEX-602", "-", 1), ("LEX-105", ".5", 2)]),
@@ -77,7 +77,7 @@ class NumberLiteralTests(unittest.TestCase):
     def test_errors_are_not_tokens(self):
         result = tokenize("12.3.4;")
         self.assertEqual([t.type for t in result.tokens], [";"])
-        self.assertEqual(result.errors[0].message, "LEX-106 (Ln 1, Col 1): Invalid '12.3.4'")
+        self.assertEqual(result.errors[0].message, "Line 1, Col 1: Multiple decimal points '12.3.4'")
 
 
 if __name__ == "__main__":
