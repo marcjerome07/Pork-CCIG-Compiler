@@ -11,7 +11,7 @@ MINUS = "-", ASSIGN = "=", LPAREN = "(", RPAREN = ")", LBRACKET = "[", RBRACKET 
 import unittest
 
 from pork_lexer import tokenize
-from test_lexer import assert_full_coverage
+from test_lexer import assert_full_coverage, base_type
 
 # (source, expected non-whitespace tokens as (type, lexeme, col)), all on line 1.
 CASES = (
@@ -30,7 +30,7 @@ CASES = (
 
 
 def visible(result):
-    return [(t.type, t.lexeme, t.col) for t in result.tokens
+    return [(base_type(t.type), t.lexeme, t.col) for t in result.tokens
             if t.type not in ("space", "tab", "newline")]
 
 

@@ -16,7 +16,7 @@ import unittest
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from pork_lexer import KEYWORDS, TOKEN_TYPES, tokenize
+from pork_lexer import KEYWORDS, UNAVAILABLE, is_token_type, tokenize
 from server import LexerRequestHandler
 
 # ---------------------------------------------------------------------------
@@ -42,17 +42,23 @@ def assert_full_coverage(source, result):
         raise AssertionError(f"{source!r}: characters after offset {offset} are not covered")
 
 
+def base_type(token_type):
+    """id1, id2, ... -> id, so position tests don't depend on the numbering."""
+    return "id" if token_type.startswith("id") and token_type[2:].isdigit() else token_type
+
+
 def lex(source):
     result = tokenize(source)
     assert_full_coverage(source, result)
     for token in result.tokens:
-        assert token.type in TOKEN_TYPES, token
+        assert is_token_type(token.type), token
     return result
 
 
 def items(result):
-    """Non-space tokens as (type, lexeme, line, col) and errors as (code, ...)."""
-    out = [(t.type, t.lexeme, t.line, t.col) for t in result.tokens if t.type != "space"]
+    """Non-space tokens as (type, lexeme, line, col) and errors as (code, ...).
+    Numbered identifiers are written as plain "id"."""
+    out = [(base_type(t.type), t.lexeme, t.line, t.col) for t in result.tokens if t.type != "space"]
     out += [(e.code, e.lexeme, e.line, e.col) for e in result.errors]
     return sorted(out, key=lambda x: (x[2], x[3]))
 
@@ -164,8 +170,8 @@ class TokenRecognitionTests(unittest.TestCase):
     def test_whitespace_tokens(self):
         result = lex("a \tb\nc")
         self.assertEqual([(t.type, t.lexeme, t.line, t.col) for t in result.tokens], [
-            ("id", "a", 1, 1), ("space", " ", 1, 2), ("tab", "\t", 1, 3),
-            ("id", "b", 1, 4), ("newline", "\n", 1, 5), ("id", "c", 2, 1),
+            ("id1", "a", 1, 1), ("space", " ", 1, 2), ("tab", "\t", 1, 3),
+            ("id2", "b", 1, 4), ("newline", "\n", 1, 5), ("id3", "c", 2, 1),
         ])
 
     def test_line_and_col_after_lf_and_crlf(self):
@@ -173,9 +179,9 @@ class TokenRecognitionTests(unittest.TestCase):
             result = lex(source)
             self.assertEqual(result.errors, [])
             self.assertEqual([(t.type, t.line, t.col) for t in result.tokens], [
-                ("meat", 1, 1), ("space", 1, 5), ("id", 1, 6), (";", 1, 7), ("newline", 1, 8),
+                ("meat", 1, 1), ("space", 1, 5), ("id1", 1, 6), (";", 1, 7), ("newline", 1, 8),
                 ("space", 2, 1), ("space", 2, 2), ("sauce", 2, 3), ("space", 2, 8),
-                ("id", 2, 9), (";", 2, 10), ("newline", 2, 11), ("tab", 3, 1), ("id", 3, 2),
+                ("id2", 2, 9), (";", 2, 10), ("newline", 2, 11), ("tab", 3, 1), ("id3", 3, 2),
             ], repr(source))
 
     def test_literal_kinds(self):
@@ -237,7 +243,7 @@ class DelimiterMatrixTests(unittest.TestCase):
         col = len(prefix) + 1
         for c in NEXT_CHARS:
             result = lex(prefix + text + c)
-            at = [(t.type, t.lexeme) for t in result.tokens if (t.line, t.col) == (1, col)]
+            at = [(base_type(t.type), t.lexeme) for t in result.tokens if (t.line, t.col) == (1, col)]
             accepted = at == [(token_type, text)]
             expected = c in allowed and c not in never
             self.assertEqual(accepted, expected, f"{prefix + text!r} followed by {c!r}")
@@ -351,7 +357,6 @@ class ErrorMessageTests(unittest.TestCase):
         ("'ab'", "LEX-203 (Ln 1, Col 1): Invalid ''ab''"),
         ("'\\q'", "LEX-204 (Ln 1, Col 1): Invalid ''\\q''"),
         ("'a'x", "LEX-205 (Ln 1, Col 1): Invalid ''a''"),
-        ("' '", "LEX-206 (Ln 1, Col 1): Invalid '' ''"),
         ('"ab', "LEX-301 (Ln 1, Col 1): Invalid '\"ab'"),
         ('"a\\qb"', "LEX-302 (Ln 1, Col 1): Invalid '\"a\\qb\"'"),
         ('"s"x', "LEX-303 (Ln 1, Col 1): Invalid '\"s\"'"),
@@ -489,7 +494,7 @@ class RequiredCaseTests(unittest.TestCase):
           ("meat_lit", "1", 30), (";", ";", 31)], ["LEX-501"]),
         ("chop c = 'ab';", [("LEX-203", "'ab'", 10), (";", ";", 14)], ["LEX-203"]),
         ("chop c = '';", [("LEX-202", "''", 10), (";", ";", 12)], ["LEX-202"]),
-        ("chop c = ' ';", [("LEX-206", "' '", 10), (";", ";", 13)], ["LEX-206"]),
+        ("chop c = ' ';", [("chop_lit", "' '", 10), (";", ";", 13)], []),
         ('recipe s = "hello;', [("LEX-301", '"hello;', 12)], ["LEX-301"]),
         ('recipe s = "Good M\\orning";', [("LEX-302", '"Good M\\orning"', 12), (";", ";", 27)], ["LEX-302"]),
         ("a | b", [("id", "a", 1), ("LEX-601", "|", 3), ("id", "b", 5)], ["LEX-601"]),
@@ -509,6 +514,114 @@ class RequiredCaseTests(unittest.TestCase):
             for item in expected:
                 self.assertIn(item, found, source)
             self.assertEqual(codes(result), expected_codes, source)
+
+
+# ---------------------------------------------------------------------------
+# H. Space chop, numbered identifiers and unavailable characters ($ ? @ ^)
+# ---------------------------------------------------------------------------
+
+
+def raw(result):
+    """Non-space tokens as (type, lexeme, col) with the real idN types, and
+    errors as (code, message)."""
+    return ([(t.type, t.lexeme, t.col) for t in result.tokens if t.type != "space"],
+            [(e.code, e.message) for e in result.errors])
+
+
+class SpaceChopTests(unittest.TestCase):
+    def test_valid_chop_literals(self):
+        for chop in ("' '", "'a'", "'A'", "'#'", "'\\t'", "'\\n'", "'\\''", "'\\\"'", "'\\\\'", "'\\0'"):
+            self.assertEqual(items(lex(chop)), [("chop_lit", chop, 1, 1)], chop)
+
+    def test_space_chop_in_a_declaration(self):
+        self.assertEqual(raw(lex("chop c = ' ';")), (
+            [("chop", "chop", 1), ("id1", "c", 6), ("=", "=", 8), ("chop_lit", "' '", 10), (";", ";", 13)], [],
+        ))
+
+    def test_chop_errors_stay_errors(self):
+        for source, code in (("''", "LEX-202"), ("'ab'", "LEX-203"), ("'\\'", "LEX-201"),
+                             ("'a", "LEX-201"), ("'a'x", "LEX-205")):
+            self.assertEqual(codes(lex(source)), [code], source)
+
+    def test_recipe_spaces_unchanged(self):
+        self.assertEqual(items(lex('" a b "')), [("recipe_lit", '" a b "', 1, 1)])
+
+
+class IdentifierNumberTests(unittest.TestCase):
+    def test_repeat_keeps_its_number(self):
+        result = lex("meat x = y + x;")
+        self.assertEqual(raw(result)[0], [
+            ("meat", "meat", 1), ("id1", "x", 6), ("=", "=", 8), ("id2", "y", 10),
+            ("+", "+", 12), ("id1", "x", 14), (";", ";", 15),
+        ])
+        self.assertEqual(result.symbols, {"x": 1, "y": 2})
+
+    def test_case_sensitive(self):
+        self.assertEqual(lex("meat Age = age;").symbols, {"Age": 1, "age": 2})
+
+    def test_reserved_words_get_no_number(self):
+        result = lex("meat porky = 1; meatball = yummy;")
+        self.assertEqual([t.type for t in result.tokens if t.type.startswith("id")], ["id1", "id2"])
+        self.assertEqual(result.symbols, {"porky": 1, "meatball": 2})
+
+    def test_underscore_names(self):
+        self.assertEqual(raw(lex("meat ___ = 2;"))[0][1], ("id1", "___", 6))
+
+    def test_errors_use_no_number(self):
+        result = lex("meat abcdefghijklmnopqrstu = 1; a$b; c;")
+        self.assertEqual(result.symbols, {"u": 1, "b": 2, "c": 3})
+
+    def test_reset_for_each_input(self):
+        lex("meat a; meat b;")
+        self.assertEqual(lex("meat b;").symbols, {"b": 1})
+
+    def test_symbols_in_api_output(self):
+        self.assertEqual(lex("x = y + x;").to_dict()["symbols"], {"x": 1, "y": 2})
+
+
+class UnavailableCharacterTests(unittest.TestCase):
+    def test_removed_from_every_ascii_set(self):
+        from pork_lexer import _is_ascii1, _is_ascii2, _is_ascii3, _is_ascii4
+        self.assertEqual(UNAVAILABLE, frozenset("$?@^"))
+        for check in (_is_ascii1, _is_ascii2, _is_ascii3, _is_ascii4):
+            for ch in UNAVAILABLE:
+                self.assertFalse(check(ch), (check.__name__, ch))
+            self.assertTrue(check("#"), check.__name__)
+
+    def test_inside_literals_and_comments(self):
+        cases = (
+            ("chop c = '$';", "'$'", "LEX-902 (Ln 1, Col 11): Unavailable '$' (ASCII 36)"),
+            ("chop c = '?';", "'?'", "LEX-902 (Ln 1, Col 11): Unavailable '?' (ASCII 63)"),
+            ('recipe s = "Hi @ there";', '"Hi @ there"', "LEX-902 (Ln 1, Col 16): Unavailable '@' (ASCII 64)"),
+            ('recipe s = "2^3";', '"2^3"', "LEX-902 (Ln 1, Col 14): Unavailable '^' (ASCII 94)"),
+            ("// is this valid?", "// is this valid?", "LEX-902 (Ln 1, Col 17): Unavailable '?' (ASCII 63)"),
+            ("/* price in $ */", "/* price in $ */", "LEX-902 (Ln 1, Col 13): Unavailable '$' (ASCII 36)"),
+            ("/* line one\n  cost $5 */", "/* line one\n  cost $5 */",
+             "LEX-902 (Ln 2, Col 8): Unavailable '$' (ASCII 36)"),
+        )
+        for source, lexeme, message in cases:
+            with self.subTest(source=source):
+                errors = lex(source).errors
+                self.assertEqual([(e.code, e.status, e.lexeme, e.message) for e in errors],
+                                 [("LEX-902", "Unavailable", lexeme, message)])
+
+    def test_scanning_continues_after_the_literal(self):
+        self.assertEqual(items(lex("chop c = '$';"))[-1], (";", ";", 1, 13))
+
+    def test_from_state_zero(self):
+        self.assertEqual(raw(lex("?"))[1], [("LEX-901", "LEX-901 (Ln 1, Col 1): Unavailable '?'")])
+        result = lex("meat x;\n?\nx = 1;")
+        self.assertEqual(raw(result)[1], [("LEX-901", "LEX-901 (Ln 2, Col 1): Unavailable '?'")])
+
+    def test_identifier_followed_by_unavailable(self):
+        self.assertEqual(raw(lex("meat a$b = 1;")), (
+            [("meat", "meat", 1), ("id1", "b", 8), ("=", "=", 10), ("meat_lit", "1", 12), (";", ";", 13)],
+            [("LEX-502", "LEX-502 (Ln 1, Col 6): Invalid 'a'"),
+             ("LEX-901", "LEX-901 (Ln 1, Col 7): Unavailable '$'")],
+        ))
+
+    def test_hash_still_valid(self):
+        self.assertEqual(lex("chop c = '#';").errors, [])
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ they are errors (code + whole lexeme), as the group decided (Q2).
 import unittest
 
 from pork_lexer import tokenize
-from test_lexer import assert_full_coverage
+from test_lexer import assert_full_coverage, base_type
 
 # (source, expected items in column order). Tokens are (type, lexeme, col);
 # errors are (code, lexeme, col). All on line 1; whitespace tokens omitted.
@@ -54,7 +54,7 @@ CASES = (
 
 
 def items(result):
-    found = [(t.type, t.lexeme, t.col) for t in result.tokens
+    found = [(base_type(t.type), t.lexeme, t.col) for t in result.tokens
              if t.type not in ("space", "tab", "newline")]
     found += [(e.code, e.lexeme, e.col) for e in result.errors]
     return sorted(found, key=lambda item: item[2])

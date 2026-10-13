@@ -30,21 +30,25 @@ OPERATORS = frozenset("+-*/%<>=!&|")
 WHITESPACE = frozenset(" \t\n")
 ESCAPE_SEQ = frozenset("nt'\"\\0")
 
-
-def _is_ascii1(ch):  # printable ASCII except \ and '   (chop literal text)
-    return 32 <= ord(ch) <= 126 and ch not in "\\'"
-
-
-def _is_ascii2(ch):  # printable ASCII except \ and "   (recipe literal text)
-    return 32 <= ord(ch) <= 126 and ch not in '\\"'
+# Not allowed anywhere in a PORK CCIG program: $ (36), ? (63), @ (64), ^ (94).
+# Every ascii set below excludes them.
+UNAVAILABLE = frozenset("$?@^")
 
 
-def _is_ascii3(ch):  # printable ASCII                  (single-line comment text)
-    return 32 <= ord(ch) <= 126
+def _is_ascii1(ch):  # ASCII 32-126 except \ ' and UNAVAILABLE   (chop literal text)
+    return 32 <= ord(ch) <= 126 and ch not in "\\'" and ch not in UNAVAILABLE
 
 
-def _is_ascii4(ch):  # printable ASCII except space     (multi-line comment text)
-    return 33 <= ord(ch) <= 126
+def _is_ascii2(ch):  # ASCII 32-126 except \ " and UNAVAILABLE   (recipe literal text)
+    return 32 <= ord(ch) <= 126 and ch not in '\\"' and ch not in UNAVAILABLE
+
+
+def _is_ascii3(ch):  # ASCII 32-126 except UNAVAILABLE           (single-line comment text)
+    return 32 <= ord(ch) <= 126 and ch not in UNAVAILABLE
+
+
+def _is_ascii4(ch):  # ASCII 33-126 except UNAVAILABLE           (multi-line comment text)
+    return 33 <= ord(ch) <= 126 and ch not in UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +194,14 @@ TOKEN_TYPES = frozenset(
     + list(OTHER_TOKEN_TYPES)
 )
 
+
+def is_token_type(token_type):
+    """True for every name in TOKEN_TYPES and for numbered identifiers (id1, id2, ...)."""
+    if token_type in TOKEN_TYPES:
+        return True
+    number = token_type[len(ID):]
+    return token_type.startswith(ID) and number.isdigit() and not number.startswith("0")
+
 # Whitespace and comments are skipped by the lookback pointer.
 TRIVIA = frozenset([SPACE, NEWLINE, TAB, SINGLE_LINE_COMMENT, MULTI_LINE_COMMENT])
 
@@ -235,7 +247,6 @@ STATUS = {
     "LEX-203": "Invalid",      # chop literal with more than one character
     "LEX-204": "Invalid",      # bad escape in a chop literal
     "LEX-205": "Invalid",      # bad delimiter after a chop literal
-    "LEX-206": "Invalid",      # chop literal ' ' (a space)
     "LEX-301": "Invalid",      # unterminated recipe literal
     "LEX-302": "Invalid",      # bad escape in a recipe literal
     "LEX-303": "Invalid",      # bad delimiter after a recipe literal
@@ -247,7 +258,8 @@ STATUS = {
     "LEX-701": "Invalid",      # unterminated multi-line comment
     "LEX-702": "Unavailable",  # character outside the comment character set
     "LEX-703": "Invalid",      # bad delimiter after a multi-line comment
-    "LEX-901": "Unavailable",  # character not in the PORK CCIG character set (@ $ # ...)
+    "LEX-901": "Unavailable",  # character that starts no token (@ $ ? ^ # ...)
+    "LEX-902": "Unavailable",  # $ ? @ ^ inside a chop/recipe literal or a comment
 }
 
 # Short titles for each code (sent to the UI as data; not part of the message).
@@ -256,12 +268,12 @@ TITLES = {
     "LEX-104": "Decimal value", "LEX-105": "Decimal value", "LEX-106": "Decimal value",
     "LEX-107": "Identifier", "LEX-108": "Delimiter",
     "LEX-201": "Character literal", "LEX-202": "Character literal", "LEX-203": "Character literal",
-    "LEX-204": "Escape sequence", "LEX-205": "Delimiter", "LEX-206": "Character literal",
+    "LEX-204": "Escape sequence", "LEX-205": "Delimiter",
     "LEX-301": "String literal", "LEX-302": "Escape sequence", "LEX-303": "Delimiter",
     "LEX-401": "Delimiter", "LEX-501": "Identifier", "LEX-502": "Delimiter",
     "LEX-601": "Operator", "LEX-602": "Delimiter",
     "LEX-701": "Comment", "LEX-702": "Comment character", "LEX-703": "Delimiter",
-    "LEX-901": "Character",
+    "LEX-901": "Character", "LEX-902": "Unavailable character",
 }
 
 # Unterminated literals and comments quote only their first 10 characters.
@@ -278,8 +290,12 @@ def show_lexeme(lexeme, code=None):
 
 
 def format_message(code, line, col, lexeme):
-    """The one place lexer messages are built: <CODE> (Ln <l>, Col <c>): <STATUS> '<lexeme>'"""
-    return f"{code} (Ln {line}, Col {col}): {STATUS[code]} '{show_lexeme(lexeme, code)}'"
+    """The one place lexer messages are built: <CODE> (Ln <l>, Col <c>): <STATUS> '<lexeme>'
+    For LEX-902 the lexeme is the unavailable character, followed by its ASCII code."""
+    message = f"{code} (Ln {line}, Col {col}): {STATUS[code]} '{show_lexeme(lexeme, code)}'"
+    if code == "LEX-902":
+        message += f" (ASCII {ord(lexeme)})"
+    return message
 
 
 @dataclass
@@ -305,11 +321,14 @@ class LexError:
 class LexResult:
     tokens: list = field(default_factory=list)
     errors: list = field(default_factory=list)
+    # Symbol table: identifier lexeme -> number, in order of first appearance.
+    symbols: dict = field(default_factory=dict)
 
     def to_dict(self):
         return {
             "tokens": [asdict(t) for t in self.tokens],
             "errors": [asdict(e) for e in self.errors],
+            "symbols": dict(self.symbols),
         }
 
 
@@ -386,16 +405,28 @@ class _Lexer:
             self.i += 1
 
     def emit(self, token_type, end):
-        if token_type not in TOKEN_TYPES:
+        if not is_token_type(token_type):
             raise AssertionError(f"Unknown token type {token_type!r}; it is not in TOKEN_TYPES.")
         self.result.tokens.append(Token(token_type, self.src[self.i:end], self.line, self.col))
         self.remember(end, token_type in TRIVIA)
         self.advance_to(end)
 
-    def fail(self, code, end):
-        """Report an error covering src[i:end] and resume scanning at `end`."""
+    def position_of(self, index):
+        """(line, col) of src[index], counted from the current position."""
+        line, col = self.line, self.col
+        for ch in self.src[self.i:index]:
+            line, col = (line + 1, 1) if ch == "\n" else (line, col + 1)
+        return line, col
+
+    def fail(self, code, end, char_index=None):
+        """Report an error covering src[i:end] and resume scanning at `end`.
+        With char_index (LEX-902), the message names that one character and
+        its own line and column instead of the whole lexeme."""
         lexeme = self.src[self.i:end]
-        message = format_message(code, self.line, self.col, lexeme)
+        if char_index is None:
+            message = format_message(code, self.line, self.col, lexeme)
+        else:
+            message = format_message(code, *self.position_of(char_index), self.src[char_index])
         self.result.errors.append(
             LexError(code, STATUS[code], TITLES[code], self.line, self.col, lexeme, message)
         )
@@ -518,7 +549,11 @@ class _Lexer:
         elif not self.delimiter_ok(end, ID_DELIMITER):
             self.fail("LEX-502", end)
         else:
-            self.emit(ID, end)
+            # Numbered by first appearance; a repeat keeps its number. Only valid
+            # identifiers reach here, so errors never use up a number.
+            symbols = self.result.symbols
+            number = symbols.setdefault(word, len(symbols) + 1)
+            self.emit(f"{ID}{number}", end)
 
     # -- meat and sauce literals -----------------------------------------------
 
@@ -586,8 +621,10 @@ class _Lexer:
 
     @staticmethod
     def literal_body(body, is_valid_char):
-        """Return (char_count, ok). ok is False on a bad escape (a backslash not
-        followed by n t ' " \\ 0) or a character outside the allowed ASCII range."""
+        """Return (char_count, problem, k). problem is None when the body is fine,
+        "unavailable" for $ ? @ ^, or "invalid" for a bad escape (a backslash not
+        followed by n t ' " \\ 0) or another character outside the ASCII set.
+        k is the index of the problem in body."""
         count = 0
         k = 0
         while k < len(body):
@@ -595,14 +632,16 @@ class _Lexer:
             if ch == "\\":
                 esc = body[k + 1] if k + 1 < len(body) else ""
                 if esc == "" or esc not in ESCAPE_SEQ:
-                    return count, False
+                    return count, "invalid", k
                 k += 2
+            elif ch in UNAVAILABLE:
+                return count, "unavailable", k
             elif is_valid_char(ch):
                 k += 1
             else:
-                return count, False
+                return count, "invalid", k
             count += 1
-        return count, True
+        return count, None, k
 
     def lex_chop(self):
         close = self.find_closing_quote(self.i + 1, "'")
@@ -614,11 +653,11 @@ class _Lexer:
         if body == "":
             self.fail("LEX-202", end)
             return
-        if body == " ":
-            self.fail("LEX-206", end)
-            return
-        count, ok = self.literal_body(body, _is_ascii1)
-        if not ok:
+        # State 285 -> 287 on ascii1, which includes the space (ASCII 32).
+        count, problem, k = self.literal_body(body, _is_ascii1)
+        if problem == "unavailable":
+            self.fail("LEX-902", end, self.i + 1 + k)
+        elif problem:
             self.fail("LEX-204", end)
         elif count != 1:
             self.fail("LEX-203", end)
@@ -633,8 +672,10 @@ class _Lexer:
             self.fail("LEX-301", self.end_of_line(self.i))
             return
         end = close + 1
-        _, ok = self.literal_body(self.src[self.i + 1:close], _is_ascii2)
-        if not ok:
+        _, problem, k = self.literal_body(self.src[self.i + 1:close], _is_ascii2)
+        if problem == "unavailable":
+            self.fail("LEX-902", end, self.i + 1 + k)
+        elif problem:
             self.fail("LEX-302", end)
         elif not self.delimiter_ok(end, RECIPE_DELIMITER):
             self.fail("LEX-303", end)
@@ -648,6 +689,9 @@ class _Lexer:
         end = self.end_of_line(self.i)
         for k in range(self.i + 2, end):
             ch = self.src[k]
+            if ch in UNAVAILABLE:
+                self.fail("LEX-902", end, k)
+                return
             if not (_is_ascii3(ch) or ch == "\t"):
                 self.fail("LEX-702", end)
                 return
@@ -661,6 +705,9 @@ class _Lexer:
         end = close + 2
         for k in range(self.i + 2, close):
             ch = self.src[k]
+            if ch in UNAVAILABLE:
+                self.fail("LEX-902", end, k)
+                return
             if not (_is_ascii4(ch) or ch in WHITESPACE):
                 self.fail("LEX-702", end)
                 return
