@@ -367,7 +367,7 @@ const CodeEditor = forwardRef(function CodeEditor(
             </button>
           </div>
           <button type="button" className="btn btn-primary" onClick={onRun} disabled={running}>
-            <span aria-hidden="true">▶</span> {running ? 'Running…' : 'Run'}
+            <span aria-hidden="true">▶</span> {running ? 'Running Lexer…' : 'Run Lexer'}
           </button>
         </div>
       </div>
