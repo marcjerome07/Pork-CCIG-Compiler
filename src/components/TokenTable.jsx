@@ -28,8 +28,8 @@ export default function TokenTable({ tokens }) {
   return (
     <section className="panel token-panel" aria-labelledby="tokens-title">
       <div className="panel-header">
-        <h2 id="tokens-title" className="panel-title">Tokens</h2>
-        {tokens.length > 0 && <span className="panel-count">{tokens.length}</span>}
+        <h2 id="tokens-title" className="panel-title">Lexer Table</h2>
+        <span className="panel-count">Count: {tokens.length}</span>
       </div>
       <div className="token-scroll">
         <table className="token-table">

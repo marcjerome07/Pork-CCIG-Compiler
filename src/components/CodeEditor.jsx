@@ -11,8 +11,9 @@ import {
 import { errorRanges, errorsByLine, highlightSegments, rangeAt } from '../errorRanges.js';
 import { readStorage, writeStorage } from '../storage.js';
 
-const FONT_KEY = 'pork-editor-font-size';
-const DEFAULT_FONT = 14;
+// New key so browsers that saved the old 14px default pick up the new one.
+const FONT_KEY = 'pork-editor-font-size-v2';
+const DEFAULT_FONT = 18;
 const MIN_FONT = 8;
 const MAX_FONT = 32;
 const STEP = 2;

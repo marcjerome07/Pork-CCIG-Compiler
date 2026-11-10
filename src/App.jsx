@@ -7,7 +7,8 @@ import ThemeToggle from './components/ThemeToggle.jsx';
 import { lexSource } from './lexerApi.js';
 import { readStorage, writeStorage } from './storage.js';
 
-const THEME_KEY = 'pork-theme';
+// New key so browsers that saved the old light default pick up dark. Keep in sync with index.html.
+const THEME_KEY = 'pork-theme-v2';
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
@@ -31,7 +32,7 @@ function summarize(tokens, errors) {
 
 export default function App() {
   const [theme, setTheme] = useState(() =>
-    readStorage(THEME_KEY, 'light') === 'dark' ? 'dark' : 'light'
+    readStorage(THEME_KEY, 'dark') === 'light' ? 'light' : 'dark'
   );
   const [source, setSource] = useState('');
   const [tokens, setTokens] = useState([]);
@@ -78,7 +79,11 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1 className="app-title">
-          <img className="app-logo" src="/logo.png" alt="PORK CCIG Compiler" />
+          <img
+            className="app-logo"
+            src={theme === 'dark' ? '/logo-dark.png' : '/logo.png'}
+            alt="PORK CCIG Compiler"
+          />
         </h1>
         <ThemeToggle
           theme={theme}
