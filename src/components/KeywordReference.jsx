@@ -24,38 +24,38 @@ export default function KeywordReference() {
     writeStorage(OPEN_KEY, e.currentTarget.open);
   };
 
-  return (
-    <details className="panel keyword-panel" open={open} onToggle={toggle}>
-      <summary className="panel-header keyword-summary">
-        <h2 className="panel-title">Keywords</h2>
-        {data && <span className="panel-count">{data.keywords.length}</span>}
-      </summary>
-      <div className="keyword-body">
-        {error && (
-          <p className="keyword-message">
-            {error}{' '}
-            <button type="button" className="btn btn-text" onClick={load}>Retry</button>
-          </p>
-        )}
-        {!error && !data && <p className="keyword-message">Loading keywords…</p>}
-        {data &&
-          data.groups.map((group) => (
-            <div key={group} className="keyword-group">
-              <h3 className="keyword-group-title">{group}</h3>
-              <ul className="keyword-list">
-                {data.keywords
-                  .filter((k) => k.group === group)
-                  .map((k) => (
-                    <li key={k.word} title={k.description}>
-                      <code className="keyword-word">{k.word}</code>
-                      <span className="keyword-c">{k.cCounterpart}</span>
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          ))}
-      </div>
-    </details>
-  );
-  // Uncomment the above to show the keywords panel
+  // return (
+  //   <details className="panel keyword-panel" open={open} onToggle={toggle}>
+  //     <summary className="panel-header keyword-summary">
+  //       <h2 className="panel-title">Keywords</h2>
+  //       {data && <span className="panel-count">{data.keywords.length}</span>}
+  //     </summary>
+  //     <div className="keyword-body">
+  //       {error && (
+  //         <p className="keyword-message">
+  //           {error}{' '}
+  //           <button type="button" className="btn btn-text" onClick={load}>Retry</button>
+  //         </p>
+  //       )}
+  //       {!error && !data && <p className="keyword-message">Loading keywords…</p>}
+  //       {data &&
+  //         data.groups.map((group) => (
+  //           <div key={group} className="keyword-group">
+  //             <h3 className="keyword-group-title">{group}</h3>
+  //             <ul className="keyword-list">
+  //               {data.keywords
+  //                 .filter((k) => k.group === group)
+  //                 .map((k) => (
+  //                   <li key={k.word} title={k.description}>
+  //                     <code className="keyword-word">{k.word}</code>
+  //                     <span className="keyword-c">{k.cCounterpart}</span>
+  //                   </li>
+  //                 ))}
+  //             </ul>
+  //           </div>
+  //         ))}
+  //     </div>
+  //   </details>
+  // );
+  // Uncomment above to show the keywords panel
 }
