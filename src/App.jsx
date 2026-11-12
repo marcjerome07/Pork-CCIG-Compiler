@@ -63,9 +63,12 @@ export default function App() {
         return;
       }
       const result = await lexSource(source);
-      setTokens(result.tokens);
+      // The lexer still tokenizes spaces (its delimiter rules need them); they
+      // are just left out of the Lexer Table and the token count.
+      const shown = result.tokens.filter((t) => t.type !== 'space');
+      setTokens(shown);
       setLexed({ source, errors: result.errors });
-      setConsoleLines(summarize(result.tokens, result.errors));
+      setConsoleLines(summarize(shown, result.errors));
     } catch (err) {
       setTokens([]);
       setLexed({ source: null, errors: [] });
