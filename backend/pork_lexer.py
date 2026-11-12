@@ -128,7 +128,7 @@ KEYWORDS = (
     Keyword("case", "Conditional Statements", "case", "Represents one possible choice within a switch statement.", "delim2"),
     Keyword("default", "Conditional Statements", "default", "Executes when none of the cases match.", "delim2"),
     Keyword("for", "Iterative Statements", "for", "A loop commonly used to repeat code a specific number of times.", "delim4"),
-    Keyword("while", "Iterative Statements", "while", "Repeats a block of code as long as its condition remains true.", "whitespace"),
+    Keyword("while", "Iterative Statements", "while", "Repeats a block of code as long as its condition remains true.", "delim4"),
     Keyword("do", "Iterative Statements", "do", "Runs the loop body first and checks the condition afterward.", "delim3"),
     Keyword("stop", "Jump Statements", "break", "Ends the execution of a loop or switch statement.", "delim1"),
     Keyword("again", "Jump Statements", "continue", "Skips the current loop cycle and proceeds to the next one.", "delim1"),

@@ -110,7 +110,7 @@ KEYWORD_DELIM = {
     "meat": "whitespace", "sauce": "whitespace", "chop": "whitespace",
     "recipe": "whitespace", "cooked": "whitespace", "empty": "whitespace",
     "menu": "whitespace", "if": "delim4", "else": "delim3", "switch": "delim4",
-    "case": "delim2", "default": "delim2", "for": "delim4", "while": "whitespace",
+    "case": "delim2", "default": "delim2", "for": "delim4", "while": "delim4",
     "do": "delim3", "stop": "delim1", "again": "delim1", "serveback": "whitespace",
     "pork": "delim5", "serve": "delim4", "taste": "delim4", "yummy": "delim6",
     "yuck": "delim6", "fixed": "whitespace",
