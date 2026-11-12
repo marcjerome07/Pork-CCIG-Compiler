@@ -9,7 +9,11 @@ import {
   useState,
 } from 'react';
 import { errorRanges, errorsByLine, highlightSegments, rangeAt } from '../errorRanges.js';
+import { CLOSERS, INDENT, closerEdit, indentLinesEdit, newlineEdit } from '../indentation.js';
+import { fetchKeywords, lexSource } from '../lexerApi.js';
 import { readStorage, writeStorage } from '../storage.js';
+import { highlightLines, lexSpans, shiftSpans } from '../syntaxHighlight.js';
+import SyntaxLayer from './SyntaxLayer.jsx';
 
 // New key so browsers that saved the old 14px default pick up the new one.
 const FONT_KEY = 'pork-editor-font-size-v2';
@@ -17,7 +21,10 @@ const DEFAULT_FONT = 18;
 const MIN_FONT = 8;
 const MAX_FONT = 32;
 const STEP = 2;
-const TAB = '    ';
+const TAB_SIZE = 4; // must match tab-size in styles.css
+// Pause after the last keystroke before the syntax colors are re-lexed.
+const HIGHLIGHT_DELAY_MS = 150;
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
 
 function clampFont(size) {
   return Math.min(MAX_FONT, Math.max(MIN_FONT, size));
@@ -95,7 +102,7 @@ function toggleLineComments(text, selStart, selEnd) {
 
 // Width a character takes on screen, in columns (tabs stop every 4 columns, like the CSS tab-size).
 function visualWidth(ch, column) {
-  return ch === '\t' ? TAB.length - (column % TAB.length) : 1;
+  return ch === '\t' ? TAB_SIZE - (column % TAB_SIZE) : 1;
 }
 
 const CodeEditor = forwardRef(function CodeEditor(
@@ -111,6 +118,7 @@ const CodeEditor = forwardRef(function CodeEditor(
   const gutterRef = useRef(null);
   const highlightRef = useRef(null);
   const errorLayerRef = useRef(null);
+  const syntaxLayerRef = useRef(null);
   const measureRef = useRef(null);
   const charWidthRef = useRef(8);
   const escapedRef = useRef(false);
@@ -123,6 +131,49 @@ const CodeEditor = forwardRef(function CodeEditor(
   const ranges = useMemo(() => errorRanges(value, errors), [value, errors]);
   const lineErrors = useMemo(() => errorsByLine(ranges), [ranges]);
   const segments = useMemo(() => highlightSegments(value, ranges), [value, ranges]);
+
+  // Syntax colors: the text is lexed by the same Python lexer the Run button uses,
+  // a moment after typing pauses. Until the answer arrives, the previous colors
+  // are shifted to fit the edit, so typing never waits on the lexer.
+  const [lexed, setLexed] = useState({ text: '', tokens: [], errors: [] });
+  const [dataTypes, setDataTypes] = useState(() => new Set());
+
+  useEffect(() => {
+    fetchKeywords()
+      .then((data) => {
+        const words = data.keywords.filter((k) => k.group === 'Data Types').map((k) => k.word);
+        setDataTypes(new Set(words));
+      })
+      .catch(() => {}); // No server: the editor just shows plain text.
+  }, []);
+
+  useEffect(() => {
+    if (!value) {
+      setLexed({ text: '', tokens: [], errors: [] });
+      return undefined;
+    }
+    let stale = false;
+    const timer = setTimeout(() => {
+      lexSource(value)
+        .then((result) => {
+          if (!stale) setLexed({ text: value, tokens: result.tokens, errors: result.errors });
+        })
+        .catch(() => {});
+    }, HIGHLIGHT_DELAY_MS);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [value]);
+
+  const lexedSpans = useMemo(
+    () => lexSpans(lexed.text, lexed.tokens, lexed.errors, dataTypes),
+    [lexed, dataTypes]
+  );
+  const syntaxLines = useMemo(
+    () => highlightLines(value, shiftSpans(lexed.text, lexedSpans, value)),
+    [value, lexed.text, lexedSpans]
+  );
 
   const zoomBy = useCallback((delta) => setFontSize((s) => clampFont(s + delta)), []);
   const resetZoom = useCallback(() => setFontSize(DEFAULT_FONT), []);
@@ -142,13 +193,13 @@ const CodeEditor = forwardRef(function CodeEditor(
     if (highlightRef.current) {
       highlightRef.current.style.transform = `translateY(${-ta.scrollTop}px)`;
     }
-    if (errorLayerRef.current) {
-      errorLayerRef.current.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
-    }
+    const shift = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+    if (errorLayerRef.current) errorLayerRef.current.style.transform = shift;
+    if (syntaxLayerRef.current) syntaxLayerRef.current.style.transform = shift;
   }, []);
 
   // Re-align after zoom or content changes (the textarea's scroll range changes with them).
-  useLayoutEffect(syncScroll, [fontSize, value, focused, caretLine, segments, syncScroll]);
+  useLayoutEffect(syncScroll, [fontSize, value, focused, caretLine, segments, syntaxLines, syncScroll]);
 
   // Character offset under a mouse position, or null outside the text.
   const offsetAtPoint = useCallback(
@@ -254,6 +305,16 @@ const CodeEditor = forwardRef(function CodeEditor(
     }
   };
 
+  // Applies an edit from indentation.js: replace a stretch of text, then set the selection.
+  const applyEdit = (edit) => {
+    if (!edit) return;
+    const ta = textareaRef.current;
+    ta.setSelectionRange(edit.start, edit.end);
+    insertText(edit.text);
+    ta.setSelectionRange(edit.selStart, edit.selEnd);
+    updateCaretLine();
+  };
+
   const handleKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && (e.key === '=' || e.key === '+')) {
@@ -286,11 +347,36 @@ const CodeEditor = forwardRef(function CodeEditor(
       escapedRef.current = true;
       return;
     }
-    if (e.key === 'Tab' && !e.shiftKey && !mod && !e.altKey && !escapedRef.current) {
-      e.preventDefault();
-      insertText(TAB);
-    }
+    if (MODIFIER_KEYS.has(e.key)) return; // Escape, Shift, Tab still escapes.
+    const escaped = escapedRef.current;
     escapedRef.current = false;
+    if (mod || e.altKey || e.isComposing) return;
+
+    const ta = textareaRef.current;
+    const { selectionStart: start, selectionEnd: end } = ta;
+    if (e.key === 'Tab' && !escaped) {
+      // Tab inserts an indent at the caret; with several lines selected, or with
+      // Shift, it indents / un-indents every selected line.
+      e.preventDefault();
+      if (e.shiftKey || ta.value.slice(start, end).includes('\n')) {
+        applyEdit(indentLinesEdit(ta.value, start, end, e.shiftKey));
+      } else {
+        insertText(INDENT);
+      }
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applyEdit(newlineEdit(ta.value, start, end));
+      return;
+    }
+    if (CLOSERS.has(e.key)) {
+      const edit = closerEdit(ta.value, start, end, e.key);
+      if (edit) {
+        e.preventDefault();
+        applyEdit(edit);
+      }
+    }
   };
 
   // Keep focus in the textarea when clicking toolbar buttons so the caret and selection survive.
@@ -389,6 +475,12 @@ const CodeEditor = forwardRef(function CodeEditor(
               aria-hidden="true"
             />
           )}
+          <SyntaxLayer
+            ref={syntaxLayerRef}
+            lines={syntaxLines}
+            lineHeight={lineHeight}
+            textareaRef={textareaRef}
+          />
           {ranges.length > 0 && (
             // A copy of the text behind the (transparent) textarea; only the error
             // pieces are drawn. React escapes the text, so < > & show as-is.
