@@ -4,7 +4,7 @@
 
 Run this file directly for a demonstration:
 
-    py backend/pork_lexer.py
+    py backend/lexer/pork_lexer.py
 """
 
 from dataclasses import dataclass

@@ -11,7 +11,7 @@ import unittest
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from pork_lexer import ACCEPTING, TRANSITIONS, PorkCCigLexer, tokenize
+from lexer.pork_lexer import ACCEPTING, TRANSITIONS, PorkCCigLexer, tokenize
 from server import LexerRequestHandler, keyword_reference, lex_response
 
 WHITESPACE_TYPES = ("space", "tab", "newline")
