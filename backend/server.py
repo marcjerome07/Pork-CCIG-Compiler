@@ -12,7 +12,7 @@ Endpoints:
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from lexer.pork_lexer import IDENTIFIER, tokenize
+from lexer.dfa_lexer import IDENTIFIER, tokenize
 
 HOST = "127.0.0.1"
 PORT = 8000

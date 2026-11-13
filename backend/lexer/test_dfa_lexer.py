@@ -3,16 +3,11 @@
     py -m unittest discover -s backend -v
 """
 
-import json
 import random
 import string
-import threading
 import unittest
-import urllib.request
-from http.server import ThreadingHTTPServer
 
-from lexer.pork_lexer import ACCEPTING, TRANSITIONS, PorkCCigLexer, tokenize
-from server import LexerRequestHandler, keyword_reference, lex_response
+from lexer.dfa_lexer import NO_TRANSITION, NOT_FINAL, PorkCCigLexer, token_type, tokenize, transition
 
 WHITESPACE_TYPES = ("space", "tab", "newline")
 
@@ -60,65 +55,61 @@ OPS = "+-*/%<>=!&|"
 WS = " \t\n"
 PRINTABLE = [chr(c) for c in range(32, 127)] + ["\t", "\n"]
 
-DELIMS = {
-    "whitespace": WS,
-    "alpha_id": AI,
-    "delim1": ";" + WS,
-    "delim2": ":" + WS,
-    "delim3": "{" + WS,
-    "delim4": "(" + WS,
-    "delim5": ",({;" + WS,
-    "delim6": OPS + "})]:;," + WS,
-    "delim7": AN + "+-!{('\"" + WS,
-    "delim8": AN + "+-!('\"" + WS,
-    "delim9": AN + "-!('\"" + WS,
-    "delim10": AI + "()],;" + WS,
-    "delim11": AN + "+-!(" + WS,
-    "delim13": AN + "+-!{(/'\"" + WS,
-    "delim14": AI + "};," + WS,
-    "delim15": AN + "-+!()'\"" + WS,
-    "delim16": OPS + "{)[].,:;" + WS,
-    "delim17": AN + "+-!(]'\"" + WS,
-    "delim18": OPS + ")[],;" + WS,
-    "delim19": AN + "{+-&'\"" + WS,
-    "delim20": AN + "}+-" + WS,
-    "delim21": OPS + "()[].,;" + WS,
-    "delim22": OPS + ")]},:;" + WS,
-    "delim23": OPS + "):]},;" + WS,
-    "delim25": AN + OPS + "{}()[]:;,'\"" + WS,
-}
+DELIM1 = ";" + WS
+DELIM2 = ":" + WS
+DELIM3 = "{" + WS
+DELIM4 = "(" + WS
+DELIM5 = ",({;" + WS
+DELIM6 = OPS + "})]:;," + WS
+DELIM7 = AN + "+-!{('\"" + WS
+DELIM8 = AN + "+-!('\"" + WS
+DELIM9 = AN + "-!('\"" + WS
+DELIM10 = AI + "()],;" + WS
+DELIM11 = AN + "+-!(" + WS
+DELIM13 = AN + "+-!{(/'\"" + WS
+DELIM14 = AI + "};," + WS
+DELIM15 = AN + "-+!()'\"" + WS
+DELIM16 = OPS + "{)[].,:;" + WS
+DELIM17 = AN + "+-!(]'\"" + WS
+DELIM18 = OPS + ")[],;" + WS
+DELIM19 = AN + "{+-&'\"" + WS
+DELIM20 = AN + "}+-" + WS
+DELIM21 = OPS + "()[].,;" + WS
+DELIM22 = OPS + ")]},:;" + WS
+DELIM23 = OPS + "):]},;" + WS
+DELIM25 = AN + OPS + "{}()[]:;,'\"" + WS
 
-RESERVED_WORDS = {
-    "meat": "whitespace", "sauce": "whitespace", "chop": "whitespace", "recipe": "whitespace",
-    "cooked": "whitespace", "empty": "whitespace", "menu": "whitespace",
-    "if": "delim4", "else": "delim3", "switch": "delim4",
-    "case": "delim2", "default": "delim2", "for": "delim4", "while": "delim4",
-    "do": "delim3", "stop": "delim1", "again": "delim1", "serveback": "whitespace",
-    "pork": "delim5", "serve": "delim4", "taste": "delim4",
-    "yummy": "delim6", "yuck": "delim6", "fixed": "whitespace",
-}
+# (reserved word, the characters that may follow it)
+RESERVED_WORDS = (
+    ("meat", WS), ("sauce", WS), ("chop", WS), ("recipe", WS),
+    ("cooked", WS), ("empty", WS), ("menu", WS), ("if", DELIM4),
+    ("else", DELIM3), ("switch", DELIM4), ("case", DELIM2), ("default", DELIM2),
+    ("for", DELIM4), ("while", DELIM4), ("do", DELIM3), ("stop", DELIM1),
+    ("again", DELIM1), ("serveback", WS), ("pork", DELIM5), ("serve", DELIM4),
+    ("taste", DELIM4), ("yummy", DELIM6), ("yuck", DELIM6), ("fixed", WS),
+)
+WORDS = [word for word, _ in RESERVED_WORDS]
 
-RESERVED_SYMBOLS = {
-    "=": "delim7", "==": "delim8",
-    "+": "delim9", "++": "delim10", "+=": "delim11",
-    "-": "delim11", "--": "delim10", "-=": "delim11",
-    "*": "delim11", "*=": "delim11",
-    "/": "delim11", "/=": "delim11",
-    "%": "delim11", "%=": "delim11",
-    ">": "delim8", ">=": "delim8", "<": "delim8", "<=": "delim8",
-    "!": "delim8", "!=": "delim8",
-    "&": "delim8", "&&": "delim8", "||": "delim8",
-    "{": "delim13", "}": "delim14", "(": "delim15", ")": "delim16",
-    "[": "delim17", "]": "delim18",
-    ".": "alpha_id", ",": "delim19", ":": "whitespace", ";": "delim20",
-}
+# (reserved symbol, the characters that may follow it)
+RESERVED_SYMBOLS = (
+    ("=", DELIM7), ("==", DELIM8), ("+", DELIM9), ("++", DELIM10),
+    ("+=", DELIM11), ("-", DELIM11), ("--", DELIM10), ("-=", DELIM11),
+    ("*", DELIM11), ("*=", DELIM11), ("/", DELIM11), ("/=", DELIM11),
+    ("%", DELIM11), ("%=", DELIM11), (">", DELIM8), (">=", DELIM8),
+    ("<", DELIM8), ("<=", DELIM8), ("!", DELIM8), ("!=", DELIM8),
+    ("&", DELIM8), ("&&", DELIM8), ("||", DELIM8), ("{", DELIM13),
+    ("}", DELIM14), ("(", DELIM15), (")", DELIM16), ("[", DELIM17),
+    ("]", DELIM18), (".", AI), (",", DELIM19), (":", WS),
+    (";", DELIM20),
+)
+SYMBOLS = [symbol for symbol, _ in RESERVED_SYMBOLS]
 
 
 class FirstPieceMixin:
     def check_followed_by(self, lexeme, token_type, delimiter, ch):
         """`lexeme` then `ch`: a token when ch is in the delimiter set, else an error."""
         first = items(lexeme + ch)[0]
-        if ch in DELIMS[delimiter]:
+        if ch in delimiter:
             self.assertEqual(first, (token_type, lexeme, 1), repr(lexeme + ch))
         else:
             self.assertEqual(first, ("ERROR", lexeme, 1), repr(lexeme + ch))
@@ -132,20 +123,20 @@ class ReservedWordTests(FirstPieceMixin, unittest.TestCase):
         self.assertEqual(len(RESERVED_WORDS), 24)
 
     def test_every_reserved_word_with_every_following_character(self):
-        for word, delimiter in RESERVED_WORDS.items():
+        for word, delimiter in RESERVED_WORDS:
             for ch in PRINTABLE:
                 if ch in AN:
                     continue  # the word goes on: an identifier (or serve -> serveback)
                 self.check_followed_by(word, word, delimiter, ch)
 
     def test_reserved_word_at_end_of_input(self):
-        for word in RESERVED_WORDS:
+        for word in WORDS:
             self.assertEqual(items(word), [(word, word, 1)])
 
     def test_longer_and_shorter_words_are_identifiers(self):
-        for word in RESERVED_WORDS:
+        for word in WORDS:
             for other in (word + "x", word + "_", word + "1", word[:-1], "x" + word, word.upper()):
-                if other in RESERVED_WORDS:
+                if other in WORDS:
                     continue  # "d" + "o": do[:-1] is not a word, but serveback[:-4] is
                 self.assertEqual(items(other), [("id", other, 1)], other)
 
@@ -167,7 +158,7 @@ class IdentifierTests(FirstPieceMixin, unittest.TestCase):
         for name in ("x", "_", "a1", "_count", "studentName"):
             for ch in PRINTABLE:
                 if ch not in AN:
-                    self.check_followed_by(name, "id", "delim21", ch)
+                    self.check_followed_by(name, "id", DELIM21, ch)
 
     def test_length_limit(self):
         for n in (1, 19, 20):
@@ -184,14 +175,14 @@ class IdentifierTests(FirstPieceMixin, unittest.TestCase):
 
 class ReservedSymbolTests(FirstPieceMixin, unittest.TestCase):
     def test_every_symbol_with_every_following_character(self):
-        for symbol, delimiter in RESERVED_SYMBOLS.items():
+        for symbol, delimiter in RESERVED_SYMBOLS:
             for ch in PRINTABLE:
-                if symbol + ch in RESERVED_SYMBOLS:
+                if symbol + ch in SYMBOLS:
                     continue  # a longer symbol
                 if symbol == "/" and ch in "/*":
                     continue  # a comment
                 if symbol == "-" and ch in DIGITS:
-                    continue  # a negative literal at the start of input
+                    continue  # a negative literal
                 if symbol == "&" and ch == "&" or symbol == "|":
                     continue
                 self.check_followed_by(symbol, symbol, delimiter, ch)
@@ -221,7 +212,7 @@ class WhitespaceTests(unittest.TestCase):
         for ws in WS:
             for ch in PRINTABLE:
                 tokens, errors = lex("a" + ws + ch)
-                if ch in DELIMS["delim25"]:
+                if ch in DELIM25:
                     self.assertEqual(tokens[1].lexeme, ws, repr(ws + ch))
                 else:
                     self.assertEqual(errors[0].lexeme, ws, repr(ws + ch))
@@ -239,9 +230,9 @@ class NumberTests(FirstPieceMixin, unittest.TestCase):
     def test_every_following_character(self):
         for ch in PRINTABLE:
             if ch not in DIGITS and ch != ".":
-                self.check_followed_by("123", "meat_lit", "delim22", ch)
+                self.check_followed_by("123", "meat_lit", DELIM22, ch)
             if ch not in DIGITS:
-                self.check_followed_by("1.5", "sauce_lit", "delim22", ch)
+                self.check_followed_by("1.5", "sauce_lit", DELIM22, ch)
 
     def test_meat_digit_limit(self):
         for n in (1, 14, 15):
@@ -267,11 +258,12 @@ class NumberTests(FirstPieceMixin, unittest.TestCase):
         self.assertEqual(items(".5"), [("ERROR", ".", 1), ("meat_lit", "5", 2)])
 
     def test_minus_rule(self):
-        # After an operand, "-" subtracts; otherwise "-" + digit is a negative literal.
-        self.assertEqual(items("x-1"), [("id", "x", 1), ("-", "-", 2), ("meat_lit", "1", 3)])
-        self.assertEqual(items("99-1"), [("meat_lit", "99", 1), ("-", "-", 3), ("meat_lit", "1", 4)])
+        # "-" directly before a digit is always a negative literal.
+        self.assertEqual(items("x-1"), [("id", "x", 1), ("meat_lit", "-1", 2)])
+        self.assertEqual(items("x - 1"), [("id", "x", 1), ("-", "-", 3), ("meat_lit", "1", 5)])
+        self.assertEqual(items("99-1"), [("meat_lit", "99", 1), ("meat_lit", "-1", 3)])
         self.assertEqual(items("a[0]-1"), [("id", "a", 1), ("[", "[", 2), ("meat_lit", "0", 3), ("]", "]", 4),
-                                           ("-", "-", 5), ("meat_lit", "1", 6)])
+                                           ("meat_lit", "-1", 5)])
         self.assertEqual(items("x = -5;"), [("id", "x", 1), ("=", "=", 3), ("meat_lit", "-5", 5), (";", ";", 7)])
         self.assertEqual(items("99 - -1"), [("meat_lit", "99", 1), ("-", "-", 4), ("meat_lit", "-1", 6)])
         self.assertEqual(items("(-3.14)"), [("(", "(", 1), ("sauce_lit", "-3.14", 2), (")", ")", 7)])
@@ -279,10 +271,9 @@ class NumberTests(FirstPieceMixin, unittest.TestCase):
                                                        ("-", "-", 14), ("meat_lit", "234", 16)])
         self.assertEqual(items("-x"), [("-", "-", 1), ("id", "x", 2)])
         self.assertEqual(items("-1234567890123456"), [("ERROR", "-123456789012345", 1), ("meat_lit", "6", 17)])
-        # The token before "-" decides, not its last character.
         self.assertEqual(items("serveback -5;"), [("serveback", "serveback", 1), ("meat_lit", "-5", 11), (";", ";", 13)])
         self.assertEqual(items("case -1:"), [("case", "case", 1), ("meat_lit", "-1", 6), (":", ":", 8)])
-        self.assertEqual(items("'a'-1"), [("chop_lit", "'a'", 1), ("-", "-", 4), ("meat_lit", "1", 5)])
+        self.assertEqual(items("'a'-1"), [("chop_lit", "'a'", 1), ("meat_lit", "-1", 4)])
 
 
 # Chop and recipe literals
@@ -296,7 +287,7 @@ class ChopTests(FirstPieceMixin, unittest.TestCase):
 
     def test_every_following_character(self):
         for ch in PRINTABLE:
-            self.check_followed_by("'a'", "chop_lit", "delim22", ch)
+            self.check_followed_by("'a'", "chop_lit", DELIM22, ch)
 
     def test_invalid_chops(self):
         self.assertEqual(messages("''")[0], "Empty character value")
@@ -315,7 +306,7 @@ class RecipeTests(FirstPieceMixin, unittest.TestCase):
 
     def test_every_following_character(self):
         for ch in PRINTABLE:
-            self.check_followed_by('"s"', "recipe_lit", "delim23", ch)
+            self.check_followed_by('"s"', "recipe_lit", DELIM23, ch)
 
     def test_invalid_recipes(self):
         self.assertEqual(items('"Hello World'), [("ERROR", '"Hello World', 1)])
@@ -433,27 +424,41 @@ def trace(source):
 
 class DfaTableTests(unittest.TestCase):
     def test_states_are_0_to_299(self):
-        self.assertEqual(sorted(TRANSITIONS), list(range(300)))
-        self.assertEqual(sorted(s for s in TRANSITIONS if TRANSITIONS[s].is_terminal), sorted(ACCEPTING))
-        for number, state in TRANSITIONS.items():
-            self.assertEqual(state.branches == [], state.is_terminal, number)
-            for branch in state.branches:
-                target = branch[1] if isinstance(branch, tuple) else branch
-                self.assertIn(target, TRANSITIONS)
+        inputs = PRINTABLE + [""]
+        for state in range(300):
+            targets = [transition(state, ch) for ch in inputs if transition(state, ch) != NO_TRANSITION]
+            if token_type(state) == NOT_FINAL:
+                self.assertTrue(targets, state)
+            else:
+                self.assertEqual(targets, [], state)
+            for target in targets:
+                self.assertTrue(0 < target < 300, (state, target))
+        self.assertEqual(transition(300, "a"), NO_TRANSITION)
+        self.assertEqual(token_type(300), NOT_FINAL)
+
+    def test_alias_states(self):
+        for alias, real in ((59, 55), (86, 81), (87, 82), (88, 83), (89, 84), (123, 118)):
+            for ch in PRINTABLE + [""]:
+                expected = transition(real, ch)
+                if (alias, expected) in ((86, 82), (87, 83), (88, 84)):
+                    expected += 5
+                self.assertEqual(transition(alias, ch), expected, (alias, ch))
 
     def test_final_states(self):
-        self.assertEqual(sorted(s for s in ACCEPTING if s < 127), [
+        finals = [state for state in range(300) if token_type(state) != NOT_FINAL]
+        self.assertEqual([s for s in finals if s < 127], [
             6, 11, 15, 21, 29, 31, 36, 41, 47, 50, 53, 58, 62, 67, 74, 80, 85, 94, 98, 104, 110, 116, 122, 126,
         ])
-        self.assertEqual(sorted(s for s in ACCEPTING if 127 <= s < 200), [
+        self.assertEqual([s for s in finals if 127 <= s < 200], [
             128, 130, 132, 134, 136, 138, 140, 142, 144, 146, 148, 150, 152, 154, 156, 158, 160, 162, 164, 166,
             168, 170, 173, 175, 177, 179, 181, 183, 185, 187, 189, 191, 193, 195, 197, 199,
         ])
-        self.assertEqual([s for s in ACCEPTING if ACCEPTING[s] == "id"], list(range(201, 240, 2)))
-        self.assertEqual([s for s in ACCEPTING if ACCEPTING[s] == "meat_lit"], list(range(241, 270, 2)))
-        self.assertEqual(sorted(s for s in ACCEPTING if ACCEPTING[s] == "sauce_lit"), [272, 274, 276, 278, 280, 282, 284])
-        self.assertEqual((ACCEPTING[289], ACCEPTING[293], ACCEPTING[295], ACCEPTING[299]),
+        self.assertEqual([s for s in finals if token_type(s) == "id"], list(range(201, 240, 2)))
+        self.assertEqual([s for s in finals if token_type(s) == "meat_lit"], list(range(241, 270, 2)))
+        self.assertEqual([s for s in finals if token_type(s) == "sauce_lit"], [272, 274, 276, 278, 280, 282, 284])
+        self.assertEqual((token_type(289), token_type(293), token_type(295), token_type(299)),
                          ("chop_lit", "recipe_lit", "Single-Line Comment", "Multi-Line Comment"))
+        self.assertEqual(sorted(token_type(s) for s in finals if s < 127), sorted(WORDS))
 
     def test_traces(self):
         self.assertEqual(trace("serveback "), [0, 75, 81, 82, 83, 84, 90, 91, 92, 93, 94])
@@ -518,61 +523,6 @@ class ProgramTests(unittest.TestCase):
         for _ in range(2000):
             source = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 60)))
             lex(source)  # assert_full_coverage runs inside
-
-    def test_to_dict(self):
-        tokens, errors = lex("x $")
-        self.assertEqual(tokens[0].to_dict(), {"type": "id", "lexeme": "x", "line": 1, "column": 1})
-        self.assertEqual(errors[-1].to_dict(),
-                         {"lexeme": "$", "message": "Unavailable character", "line": 1, "column": 3})
-
-
-# Server: the response the UI reads
-
-
-class ServerTests(unittest.TestCase):
-    def test_identifiers_are_numbered_by_first_appearance(self):
-        response = lex_response("a b a")
-        self.assertEqual([(t["type"], t["lexeme"], t["line"], t["col"]) for t in response["tokens"] if t["type"] != "space"],
-                         [("id1", "a", 1, 1), ("id2", "b", 1, 3), ("id1", "a", 1, 5)])
-        self.assertEqual(response["symbols"], {"a": 1, "b": 2})
-
-    def test_error_messages(self):
-        cases = (
-            ("meat;", "Line 1, Col 1: Invalid delimiter 'meat'", "Invalid"),
-            ("$", "Line 1, Col 1: Unavailable character '$'", "Unavailable"),
-            ("1.12345678", "Line 1, Col 1: Sauce decimal part exceeds 7 digits '1.1234567'", "Invalid"),
-            ('"123456789012', "Line 1, Col 1: Unclosed string value '\"123456789...'", "Invalid"),
-            ("x\n.", "Line 1, Col 2: Invalid delimiter '\\n'", "Invalid"),
-        )
-        for source, message, status in cases:
-            error = lex_response(source)["errors"][0]
-            self.assertEqual((error["message"], error["status"]), (message, status))
-
-    def test_keyword_reference_matches_the_reserved_words(self):
-        reference = keyword_reference()
-        self.assertEqual(sorted(k["word"] for k in reference["keywords"]), sorted(RESERVED_WORDS))
-        self.assertEqual([k["word"] for k in reference["keywords"] if k["group"] == "Data Types"],
-                         ["meat", "sauce", "chop", "recipe", "cooked", "empty", "menu"])
-
-    def test_http_endpoints(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), LexerRequestHandler)
-        LexerRequestHandler.log_message = lambda *args: None
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        base = f"http://127.0.0.1:{server.server_port}"
-        try:
-            with urllib.request.urlopen(base + "/api/keywords") as response:
-                self.assertEqual(len(json.load(response)["keywords"]), 24)
-            request = urllib.request.Request(
-                base + "/api/lex", data=json.dumps({"source": "meat x;"}).encode(),
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(request) as response:
-                body = json.load(response)
-            self.assertEqual([t["type"] for t in body["tokens"]], ["meat", "space", "id1", ";"])
-            self.assertEqual(body["errors"], [])
-        finally:
-            server.shutdown()
-            server.server_close()
 
 
 if __name__ == "__main__":

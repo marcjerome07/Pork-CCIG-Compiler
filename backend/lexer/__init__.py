@@ -1,3 +1,3 @@
-from .pork_lexer import (
+from .dfa_lexer import (
     tokenize, lex, Token, LexicalError, PorkCCigLexer, IDENTIFIER,
 )

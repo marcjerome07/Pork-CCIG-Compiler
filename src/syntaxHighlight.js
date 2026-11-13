@@ -9,7 +9,7 @@ const WHITESPACE_TYPES = new Set(['space', 'newline', 'tab']);
 const COMMENT_TYPES = new Set(['Single-Line Comment', 'Multi-Line Comment']);
 const NUMBER_TYPES = new Set(['meat_lit', 'sauce_lit']);
 const STRING_TYPES = new Set(['chop_lit', 'recipe_lit']);
-// Symbols built only from the lexer's OPERATORS characters (backend/lexer/pork_lexer.py);
+// Symbols built only from the lexer's OPERATORS characters (backend/lexer/dfa_lexer.py);
 // every other symbol ({ } ( ) [ ] . , : ;) is a delimiter.
 const OPERATOR_SYMBOL = /^[+\-*/%<>=!&|]+$/;
 
