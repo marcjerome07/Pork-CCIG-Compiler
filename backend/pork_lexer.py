@@ -1,285 +1,485 @@
-"""Lexical analyzer for the Pork CCig language.
+"""Pork CCig lexical analyzer: one table-driven DFA, states 0-299.
 
-Implements only the lexical phase of the Pork CCig Compiler specification:
-reserved words, reserved symbols, identifiers, literals, comments and
-whitespace. It never parses, type-checks or executes the source.
+    tokens, errors = tokenize(source)
 
-How the specification is applied:
-  * Regular definitions and delimiter sets come from spec pp. 72-73; the
-    transition diagrams (pp. 74-82) say which delimiter follows each token.
-  * The scanner looks at most one character ahead. When the next character
-    has no transition or is not an allowed delimiter, the characters read so
-    far become an error and scanning restarts at that character.
-  * Every token in the regular-expression table (pp. 69-72) is reported,
-    including space, newline, tab and both comment kinds. Errors are never
-    tokens.
+Run this file directly for a demonstration:
+
+    py backend/pork_lexer.py
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 
-# ---------------------------------------------------------------------------
-# Regular definitions (spec p. 72)
-# ---------------------------------------------------------------------------
-
-DIGITS = frozenset("0123456789")
-ALPHA = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-UNDERSCORE = frozenset("_")
-ALPHA_ID = ALPHA | UNDERSCORE              # alpha_id: letters and _, no digits
-ALPHA_NUMERIC = DIGITS | ALPHA_ID          # alpha_numeric: digits, letters and _
-OPERATORS = frozenset("+-*/%<>=!&|")
-WHITESPACE = frozenset(" \t\n")
-ESCAPE_SEQ = frozenset("nt'\"\\0")
-
-# Not allowed anywhere in a PORK CCIG program: $ (36), ? (63), @ (64), ^ (94).
-# Every ascii set below excludes them.
-UNAVAILABLE = frozenset("$?@^")
-
-
-def _is_ascii1(ch):  # ASCII 32-126 except \ ' and UNAVAILABLE   (chop literal text)
-    return 32 <= ord(ch) <= 126 and ch not in "\\'" and ch not in UNAVAILABLE
-
-
-def _is_ascii2(ch):  # ASCII 32-126 except \ " and UNAVAILABLE   (recipe literal text)
-    return 32 <= ord(ch) <= 126 and ch not in '\\"' and ch not in UNAVAILABLE
-
-
-def _is_ascii3(ch):  # ASCII 32-126 except UNAVAILABLE           (single-line comment text)
-    return 32 <= ord(ch) <= 126 and ch not in UNAVAILABLE
-
-
-def _is_ascii4(ch):  # ASCII 33-126 except UNAVAILABLE           (multi-line comment text)
-    return 33 <= ord(ch) <= 126 and ch not in UNAVAILABLE
-
-
-# ---------------------------------------------------------------------------
-# Delimiter sets (spec p. 73)
-# ---------------------------------------------------------------------------
-
-AN, AI, OPS, WS = ALPHA_NUMERIC, ALPHA_ID, OPERATORS, WHITESPACE
-
-DELIMITERS = {
-    "whitespace": WS,
-    "delim1": frozenset(";") | WS,
-    "delim2": frozenset(":") | WS,
-    "delim3": frozenset("{") | WS,
-    "delim4": frozenset("(") | WS,
-    "delim5": frozenset(",({;") | WS,
-    "delim6": OPS | frozenset("})]:;,") | WS,
-    "delim7": AN | frozenset("+-!{('\"") | WS,
-    "delim8": AN | frozenset("+-!('\"") | WS,
-    "delim9": AN | frozenset("-!('\"") | WS,
-    "delim10": AI | frozenset("()],;") | WS,
-    "delim11": AN | frozenset("+-!(") | WS,
-    "delim13": AN | frozenset("+-!{(/'\"") | WS,
-    "delim14": ALPHA | UNDERSCORE | frozenset("};,") | WS,
-    "delim15": AN | frozenset("-+!()'\"") | WS,
-    "delim16": OPS | frozenset("{)[].,:;") | WS,
-    "delim17": AN | frozenset("+-!(]'\"") | WS,
-    "delim18": OPS | frozenset(")[],;") | WS,
-    "delim19": AN | frozenset("{+-&'\"") | WS,
-    "delim20": AN | frozenset("}+-") | WS,
-    "delim21": OPS | frozenset("()[].,;") | WS,
-    "delim22": OPS | frozenset(")]},:;") | WS,
-    "delim23": OPS | frozenset("):]},;") | WS,
-    "delim25": AN | OPS | frozenset("{}()[]:;,'\"") | WS,
-    "alpha_id": AI,
-}
-
-ID_DELIMITER = "delim21"
-NUMBER_DELIMITER = "delim22"
-CHOP_DELIMITER = "delim22"
-RECIPE_DELIMITER = "delim23"
-WHITESPACE_DELIMITER = "delim25"
-MULTI_LINE_COMMENT_DELIMITER = "whitespace"
-
-# ---------------------------------------------------------------------------
-# Reserved words (spec pp. 5-6 for meaning, p. 74 for the delimiter after each)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Keyword:
-    word: str
-    group: str
-    c_counterpart: str
-    description: str
-    delimiter: str
-
-
-KEYWORD_GROUPS = (
-    "Data Types",
-    "Conditional Statements",
-    "Iterative Statements",
-    "Jump Statements",
-    "Others",
-)
-
-KEYWORDS = (
-    Keyword("meat", "Data Types", "int", "A data type used for storing whole numbers.", "whitespace"),
-    Keyword("sauce", "Data Types", "float", "A data type used for numbers that contain decimal values.", "whitespace"),
-    Keyword("chop", "Data Types", "char", "A data type that holds a single character.", "whitespace"),
-    Keyword("recipe", "Data Types", "char[]", "Used to store a series of characters or a string.", "whitespace"),
-    Keyword("cooked", "Data Types", "bool", "A data type that holds either a true or false value.", "whitespace"),
-    Keyword("empty", "Data Types", "void", "A type used when no value is returned.", "whitespace"),
-    Keyword("menu", "Data Types", "struct", "A user-defined type that combines related variables.", "whitespace"),
-    Keyword("if", "Conditional Statements", "if", "Executes a statement when the given condition is true.", "delim4"),
-    Keyword("else", "Conditional Statements", "else", "Executes a block of code when the if condition is false.", "delim3"),
-    Keyword("switch", "Conditional Statements", "switch", "Allows the program to choose between several possible blocks of code.", "delim4"),
-    Keyword("case", "Conditional Statements", "case", "Represents one possible choice within a switch statement.", "delim2"),
-    Keyword("default", "Conditional Statements", "default", "Executes when none of the cases match.", "delim2"),
-    Keyword("for", "Iterative Statements", "for", "A loop commonly used to repeat code a specific number of times.", "delim4"),
-    Keyword("while", "Iterative Statements", "while", "Repeats a block of code as long as its condition remains true.", "delim4"),
-    Keyword("do", "Iterative Statements", "do", "Runs the loop body first and checks the condition afterward.", "delim3"),
-    Keyword("stop", "Jump Statements", "break", "Ends the execution of a loop or switch statement.", "delim1"),
-    Keyword("again", "Jump Statements", "continue", "Skips the current loop cycle and proceeds to the next one.", "delim1"),
-    Keyword("serveback", "Jump Statements", "return", "Ends a function and may send a value back to the caller.", "whitespace"),
-    Keyword("pork", "Others", "main", "The function where the execution of the program begins.", "delim5"),
-    Keyword("serve", "Others", "printf", "A function used to show text or other output on the screen.", "delim4"),
-    Keyword("taste", "Others", "scanf", "A function used to receive data entered by the user.", "delim4"),
-    Keyword("yummy", "Others", "true", "A boolean value used to indicate a correct or active condition.", "delim6"),
-    Keyword("yuck", "Others", "false", "A boolean value used to indicate an incorrect or inactive condition.", "delim6"),
-    Keyword("fixed", "Others", "const", "A keyword used to keep a variable's value from being changed.", "whitespace"),
-)
-
-KEYWORD_DELIMITER = {kw.word: kw.delimiter for kw in KEYWORDS}
-
-# ---------------------------------------------------------------------------
-# Reserved symbols (spec pp. 75-77): symbol -> delimiter that must follow it.
-# A lone "|" has no final state.
-# ---------------------------------------------------------------------------
-
-DIAGRAM_SYMBOLS = {
-    "=": "delim7", "==": "delim8",
-    "+": "delim9", "++": "delim10", "+=": "delim11",
-    "-": "delim11", "--": "delim10", "-=": "delim11",
-    "*": "delim11", "*=": "delim11",
-    "/": "delim11", "/=": "delim11",
-    "%": "delim11", "%=": "delim11",
-    ">": "delim8", ">=": "delim8",
-    "<": "delim8", "<=": "delim8",
-    "!": "delim8", "!=": "delim8",
-    "&": "delim8", "&&": "delim8", "||": "delim8",
-    "{": "delim13", "}": "delim14",
-    "(": "delim15", ")": "delim16",
-    "[": "delim17", "]": "delim18",
-    ".": "alpha_id", ",": "delim19",
-    ":": "whitespace", ";": "delim20",
-}
-
-# Longer symbols are tried first so "<=" wins over "<".
-SYMBOLS_LONGEST_FIRST = sorted(DIAGRAM_SYMBOLS, key=len, reverse=True)
-
-# ---------------------------------------------------------------------------
-# Token types: the "Token" column of the regular-expression table (pp. 69-72)
-# ---------------------------------------------------------------------------
-
-SPACE, NEWLINE, TAB = "space", "newline", "tab"
-WHITESPACE_TOKENS = {" ": SPACE, "\n": NEWLINE, "\t": TAB}
-
-ID = "id"
-MEAT_LIT = "meat_lit"
-SAUCE_LIT = "sauce_lit"
-CHOP_LIT = "chop_lit"
-RECIPE_LIT = "recipe_lit"
+SPACE = "space"
+TAB = "tab"
+NEWLINE = "newline"
+IDENTIFIER = "id"
+MEAT_LITERAL = "meat_lit"
+SAUCE_LITERAL = "sauce_lit"
+CHOP_LITERAL = "chop_lit"
+RECIPE_LITERAL = "recipe_lit"
 SINGLE_LINE_COMMENT = "Single-Line Comment"
 MULTI_LINE_COMMENT = "Multi-Line Comment"
-OTHER_TOKEN_TYPES = (
-    ID, MEAT_LIT, SAUCE_LIT, CHOP_LIT, RECIPE_LIT, SINGLE_LINE_COMMENT, MULTI_LINE_COMMENT,
-)
 
-TOKEN_TYPES = frozenset(
-    [kw.word for kw in KEYWORDS]
-    + list(DIAGRAM_SYMBOLS)
-    + list(WHITESPACE_TOKENS.values())
-    + list(OTHER_TOKEN_TYPES)
-)
+EOF = ""
+
+# Character classes
+WHITESPACE = set(" \t\n")
+DIGITS = set("0123456789")
+LOWERCASE = set("abcdefghijklmnopqrstuvwxyz")
+UPPERCASE = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+ALPHA = LOWERCASE | UPPERCASE
+ALPHA_ID = ALPHA | {"_"}
+ALPHA_NUM = DIGITS | ALPHA_ID
+OPERATORS = set("+-*/%<>=!&|")
+UNAVAILABLE = set("$?@^")
+PRINTABLE = {chr(code) for code in range(32, 127)}
+
+DELIMS = {
+    "whitespace": WHITESPACE,
+    "digits": DIGITS,
+    "alpha_id": ALPHA_ID,
+    "alpha_num": ALPHA_NUM,
+    "escape_seq": set("nt'\"\\0"),
+    "ascii1": PRINTABLE - {"\\", "'"},
+    "ascii2": PRINTABLE - {"\\", '"'},
+    "ascii3": PRINTABLE,
+    "ascii4": PRINTABLE - {" "},
+    "delim1": {";"} | WHITESPACE,
+    "delim2": {":"} | WHITESPACE,
+    "delim3": {"{"} | WHITESPACE,
+    "delim4": {"("} | WHITESPACE,
+    "delim5": set(",({;") | WHITESPACE,
+    "delim6": OPERATORS | set("})]:;,") | WHITESPACE,
+    "delim7": ALPHA_NUM | set("+-!{('\"") | WHITESPACE,
+    "delim8": ALPHA_NUM | set("+-!('\"") | WHITESPACE,
+    "delim9": ALPHA_NUM | set("-!('\"") | WHITESPACE,
+    "delim10": ALPHA_ID | set("()],;") | WHITESPACE,
+    "delim11": ALPHA_NUM | set("+-!(") | WHITESPACE,
+    "delim13": ALPHA_NUM | set("+-!{(/'\"") | WHITESPACE,
+    "delim14": ALPHA_ID | set("};,") | WHITESPACE,
+    "delim15": ALPHA_NUM | set("-+!()'\"") | WHITESPACE,
+    "delim16": OPERATORS | set("{)[].,:;") | WHITESPACE,
+    "delim17": ALPHA_NUM | set("+-!(]'\"") | WHITESPACE,
+    "delim18": OPERATORS | set(")[],;") | WHITESPACE,
+    "delim19": ALPHA_NUM | set("{+-&'\"") | WHITESPACE,
+    "delim20": ALPHA_NUM | set("}+-") | WHITESPACE,
+    "delim21": OPERATORS | set("()[].,;") | WHITESPACE,
+    "delim22": OPERATORS | set(")]},:;") | WHITESPACE,
+    "delim23": OPERATORS | set("):]},;") | WHITESPACE,
+    "delim25": ALPHA_NUM | OPERATORS | set("{}()[]:;,'\"") | WHITESPACE,
+}
+ASCII3_OR_TAB = DELIMS["ascii3"] | {"\t"}
+ASCII4_OR_WHITESPACE = DELIMS["ascii4"] | WHITESPACE
+
+# Token types after which a "-" subtracts instead of signing a literal.
+OPERAND_END = {IDENTIFIER, MEAT_LITERAL, SAUCE_LITERAL, CHOP_LITERAL, ")", "]"}
+SKIPPED = {SPACE, TAB, NEWLINE, SINGLE_LINE_COMMENT, MULTI_LINE_COMMENT}
 
 
-def is_token_type(token_type):
-    """True for every name in TOKEN_TYPES and for numbered identifiers (id1, id2, ...)."""
-    if token_type in TOKEN_TYPES:
-        return True
-    number = token_type[len(ID):]
-    return token_type.startswith(ID) and number.isdigit() and not number.startswith("0")
+class TransitionState:
+    def __init__(self, chars, branches=None, is_terminal=False):
+        # chars: the input that enters this state. branches: next states, tried in order.
+        self.chars = chars
+        self.branches = branches or []
+        self.is_terminal = is_terminal
 
-# Whitespace and comments are skipped by the lookback pointer.
-TRIVIA = frozenset([SPACE, NEWLINE, TAB, SINGLE_LINE_COMMENT, MULTI_LINE_COMMENT])
 
-# Minus rule: a "-" whose lookback character ends an operand is subtraction;
-# otherwise a "-" followed by a digit starts a negative literal.
-OPERAND_END_CHARS = ALPHA_NUMERIC | frozenset(")]")
+TRANSITIONS = {
+    0: TransitionState("initial", [
+        1, 7, 22, 32, 42, 51, 54, 63, 68, 75, 105, 111, 117, 200,
+        240, 127, 131, 137, 143, 147, 151, 155, 159, 163, 167, 171, 174, 176,
+        178, 180, 182, 184, 186, 188, 190, 192, 194, 196, 198, 285, 290,
+    ]),
 
-# Characters that can begin some token. Anything else is LEX-901 or LEX-902.
-TOKEN_START = (
-    ALPHA_NUMERIC | WHITESPACE | frozenset("'\".|")
-    | frozenset(symbol[0] for symbol in DIAGRAM_SYMBOLS)
-)
+    # again
+    1: TransitionState("a", [2, 202, 201]),
+    2: TransitionState("g", [3, 204, 203]),
+    3: TransitionState("a", [4, 206, 205]),
+    4: TransitionState("i", [5, 208, 207]),
+    5: TransitionState("n", [6, 210]),
+    6: TransitionState(DELIMS["delim1"], is_terminal=True),
 
-# ---------------------------------------------------------------------------
-# Literal and identifier limits (written rules, spec pp. 8-10)
-# ---------------------------------------------------------------------------
+    # case, chop, cooked
+    7: TransitionState("c", [8, 12, 16, 202, 201]),
+    8: TransitionState("a", [9, 204, 203]),
+    9: TransitionState("s", [10, 206, 205]),
+    10: TransitionState("e", [11, 208]),
+    11: TransitionState(DELIMS["delim2"], is_terminal=True),
+    12: TransitionState("h", [13, 204, 203]),
+    13: TransitionState("o", [14, 206, 205]),
+    14: TransitionState("p", [15, 208]),
+    15: TransitionState(DELIMS["whitespace"], is_terminal=True),
+    16: TransitionState("o", [17, 204, 203]),
+    17: TransitionState("o", [18, 206, 205]),
+    18: TransitionState("k", [19, 208, 207]),
+    19: TransitionState("e", [20, 210, 209]),
+    20: TransitionState("d", [21, 212]),
+    21: TransitionState(DELIMS["whitespace"], is_terminal=True),
 
-MAX_IDENTIFIER_LENGTH = 20
-MAX_MEAT_DIGITS = 15
-MAX_SAUCE_WHOLE_DIGITS = 15  # sauce rule 8 (October 16, 2026 version); was 12
-MAX_SAUCE_DECIMAL_DIGITS = 7
+    # default, do
+    22: TransitionState("d", [23, 30, 202, 201]),
+    23: TransitionState("e", [24, 204, 203]),
+    24: TransitionState("f", [25, 206, 205]),
+    25: TransitionState("a", [26, 208, 207]),
+    26: TransitionState("u", [27, 210, 209]),
+    27: TransitionState("l", [28, 212, 211]),
+    28: TransitionState("t", [29, 214]),
+    29: TransitionState(DELIMS["delim2"], is_terminal=True),
+    30: TransitionState("o", [31, 204]),
+    31: TransitionState(DELIMS["delim3"], is_terminal=True),
 
-# ---------------------------------------------------------------------------
-# Results
-# ---------------------------------------------------------------------------
+    # else, empty
+    32: TransitionState("e", [33, 37, 202, 201]),
+    33: TransitionState("l", [34, 204, 203]),
+    34: TransitionState("s", [35, 206, 205]),
+    35: TransitionState("e", [36, 208]),
+    36: TransitionState(DELIMS["delim3"], is_terminal=True),
+    37: TransitionState("m", [38, 204, 203]),
+    38: TransitionState("p", [39, 206, 205]),
+    39: TransitionState("t", [40, 208, 207]),
+    40: TransitionState("y", [41, 210]),
+    41: TransitionState(DELIMS["whitespace"], is_terminal=True),
 
-# Every error message reads:  Line <n>, Col <n>: <Error message> '<lexeme>'
-MESSAGES = {
-    "LEX-101": "Meat value exceeds 15 digits",          # 1234567890123456
-    "LEX-102": "Sauce whole part exceeds 15 digits",    # 1234567890123456.5
-    "LEX-103": "Sauce decimal part exceeds 7 digits",   # 1.12345678
-    "LEX-104": "Incomplete decimal value",              # 12.
-    "LEX-105": "Incomplete decimal value",              # .5
-    "LEX-106": "Multiple decimal points",               # 1.2.3, 1..2
-    "LEX-107": "Invalid numerical value",               # 12a, 3.14abc
-    "LEX-108": "Invalid delimiter",                     # 5{
-    "LEX-201": "Unclosed character value",              # 'a
-    "LEX-202": "Empty character value",                 # ''
-    "LEX-203": "Too many characters in chop value",     # 'ab'
-    "LEX-204": "Invalid escape sequence",               # '\\q'
-    "LEX-205": "Invalid delimiter",                     # 'a'x
-    "LEX-301": "Unclosed string value",                 # "Hello
-    "LEX-302": "Invalid escape sequence",               # "Good M\\orning"
-    "LEX-303": "Invalid delimiter",                     # "s"x
-    "LEX-401": "Invalid delimiter",                     # meat;
-    "LEX-402": "Invalid boolean value",                 # yummy( , yuck{
-    "LEX-501": "Identifier exceeds 20 characters",      # a 21-character name
-    "LEX-502": "Invalid delimiter",                     # a{
-    "LEX-503": "Invalid identifier",                    # a$b
-    "LEX-601": "Invalid character",                     # a lone |
-    "LEX-602": "Invalid delimiter",                     # ;;
-    "LEX-701": "Unclosed comment",                      # /* never closed
-    "LEX-703": "Invalid delimiter",                     # /* a */x
-    "LEX-901": "Invalid character",                     # #, `, ~, backslash, non-ASCII
-    "LEX-902": "Unavailable character",                 # $ ? @ ^
+    # fixed, for
+    42: TransitionState("f", [43, 48, 202, 201]),
+    43: TransitionState("i", [44, 204, 203]),
+    44: TransitionState("x", [45, 206, 205]),
+    45: TransitionState("e", [46, 208, 207]),
+    46: TransitionState("d", [47, 210]),
+    47: TransitionState(DELIMS["whitespace"], is_terminal=True),
+    48: TransitionState("o", [49, 204, 203]),
+    49: TransitionState("r", [50, 206]),
+    50: TransitionState(DELIMS["delim4"], is_terminal=True),
+
+    # if
+    51: TransitionState("i", [52, 202, 201]),
+    52: TransitionState("f", [53, 204]),
+    53: TransitionState(DELIMS["delim4"], is_terminal=True),
+
+    # meat, menu
+    54: TransitionState("m", [55, 202, 201]),
+    55: TransitionState("e", [56, 60, 204, 203]),
+    56: TransitionState("a", [57, 206, 205]),
+    57: TransitionState("t", [58, 208]),
+    58: TransitionState(DELIMS["whitespace"], is_terminal=True),
+    59: TransitionState("e", [56, 60, 204, 203]),  # alias of 55
+    60: TransitionState("n", [61, 206, 205]),
+    61: TransitionState("u", [62, 208]),
+    62: TransitionState(DELIMS["whitespace"], is_terminal=True),
+
+    # pork
+    63: TransitionState("p", [64, 202, 201]),
+    64: TransitionState("o", [65, 204, 203]),
+    65: TransitionState("r", [66, 206, 205]),
+    66: TransitionState("k", [67, 208]),
+    67: TransitionState(DELIMS["delim5"], is_terminal=True),
+
+    # recipe
+    68: TransitionState("r", [69, 202, 201]),
+    69: TransitionState("e", [70, 204, 203]),
+    70: TransitionState("c", [71, 206, 205]),
+    71: TransitionState("i", [72, 208, 207]),
+    72: TransitionState("p", [73, 210, 209]),
+    73: TransitionState("e", [74, 212]),
+    74: TransitionState(DELIMS["whitespace"], is_terminal=True),
+
+    # sauce, serve, serveback, stop, switch
+    75: TransitionState("s", [76, 81, 95, 99, 202, 201]),
+    76: TransitionState("a", [77, 204, 203]),
+    77: TransitionState("u", [78, 206, 205]),
+    78: TransitionState("c", [79, 208, 207]),
+    79: TransitionState("e", [80, 210]),
+    80: TransitionState(DELIMS["whitespace"], is_terminal=True),
+    81: TransitionState("e", [82, 204, 203]),
+    82: TransitionState("r", [83, 206, 205]),
+    83: TransitionState("v", [84, 208, 207]),
+    84: TransitionState("e", [90, 85, 210]),
+    85: TransitionState(DELIMS["delim4"], is_terminal=True),
+    86: TransitionState("e", [87, 204, 203]),  # alias of 81
+    87: TransitionState("r", [88, 206, 205]),  # alias of 82
+    88: TransitionState("v", [89, 208, 207]),  # alias of 83
+    89: TransitionState("e", [90, 85, 210]),  # alias of 84
+    90: TransitionState("b", [91, 212, 211]),
+    91: TransitionState("a", [92, 214, 213]),
+    92: TransitionState("c", [93, 216, 215]),
+    93: TransitionState("k", [94, 218]),
+    94: TransitionState(DELIMS["whitespace"], is_terminal=True),
+    95: TransitionState("t", [96, 204, 203]),
+    96: TransitionState("o", [97, 206, 205]),
+    97: TransitionState("p", [98, 208]),
+    98: TransitionState(DELIMS["delim1"], is_terminal=True),
+    99: TransitionState("w", [100, 204, 203]),
+    100: TransitionState("i", [101, 206, 205]),
+    101: TransitionState("t", [102, 208, 207]),
+    102: TransitionState("c", [103, 210, 209]),
+    103: TransitionState("h", [104, 212]),
+    104: TransitionState(DELIMS["delim4"], is_terminal=True),
+
+    # taste
+    105: TransitionState("t", [106, 202, 201]),
+    106: TransitionState("a", [107, 204, 203]),
+    107: TransitionState("s", [108, 206, 205]),
+    108: TransitionState("t", [109, 208, 207]),
+    109: TransitionState("e", [110, 210]),
+    110: TransitionState(DELIMS["delim4"], is_terminal=True),
+
+    # while
+    111: TransitionState("w", [112, 202, 201]),
+    112: TransitionState("h", [113, 204, 203]),
+    113: TransitionState("i", [114, 206, 205]),
+    114: TransitionState("l", [115, 208, 207]),
+    115: TransitionState("e", [116, 210]),
+    116: TransitionState(DELIMS["delim4"], is_terminal=True),
+
+    # yummy, yuck
+    117: TransitionState("y", [118, 202, 201]),
+    118: TransitionState("u", [119, 124, 204, 203]),
+    119: TransitionState("m", [120, 206, 205]),
+    120: TransitionState("m", [121, 208, 207]),
+    121: TransitionState("y", [122, 210]),
+    122: TransitionState(DELIMS["delim6"], is_terminal=True),
+    123: TransitionState("u", [119, 124, 204, 203]),  # alias of 118
+    124: TransitionState("c", [125, 206, 205]),
+    125: TransitionState("k", [126, 208]),
+    126: TransitionState(DELIMS["delim6"], is_terminal=True),
+
+    # =, ==
+    127: TransitionState("=", [129, 128]),
+    128: TransitionState(DELIMS["delim7"], is_terminal=True),
+    129: TransitionState("=", [130]),
+    130: TransitionState(DELIMS["delim8"], is_terminal=True),
+
+    # +, ++, +=
+    131: TransitionState("+", [133, 135, 132]),
+    132: TransitionState(DELIMS["delim9"], is_terminal=True),
+    133: TransitionState("+", [134]),
+    134: TransitionState(DELIMS["delim10"], is_terminal=True),
+    135: TransitionState("=", [136]),
+    136: TransitionState(DELIMS["delim11"], is_terminal=True),
+
+    # -, --, -=
+    137: TransitionState("-", [139, 141, 240, 138]),
+    138: TransitionState(DELIMS["delim11"], is_terminal=True),
+    139: TransitionState("-", [140]),
+    140: TransitionState(DELIMS["delim10"], is_terminal=True),
+    141: TransitionState("=", [142]),
+    142: TransitionState(DELIMS["delim11"], is_terminal=True),
+
+    # *, *=
+    143: TransitionState("*", [145, 144]),
+    144: TransitionState(DELIMS["delim11"], is_terminal=True),
+    145: TransitionState("=", [146]),
+    146: TransitionState(DELIMS["delim11"], is_terminal=True),
+
+    # /, /=
+    147: TransitionState("/", [149, 294, 296, 148]),
+    148: TransitionState(DELIMS["delim11"], is_terminal=True),
+    149: TransitionState("=", [150]),
+    150: TransitionState(DELIMS["delim11"], is_terminal=True),
+
+    # %, %=
+    151: TransitionState("%", [153, 152]),
+    152: TransitionState(DELIMS["delim11"], is_terminal=True),
+    153: TransitionState("=", [154]),
+    154: TransitionState(DELIMS["delim11"], is_terminal=True),
+
+    # >, >=
+    155: TransitionState(">", [157, 156]),
+    156: TransitionState(DELIMS["delim8"], is_terminal=True),
+    157: TransitionState("=", [158]),
+    158: TransitionState(DELIMS["delim8"], is_terminal=True),
+
+    # <, <=
+    159: TransitionState("<", [161, 160]),
+    160: TransitionState(DELIMS["delim8"], is_terminal=True),
+    161: TransitionState("=", [162]),
+    162: TransitionState(DELIMS["delim8"], is_terminal=True),
+
+    # !, !=
+    163: TransitionState("!", [165, 164]),
+    164: TransitionState(DELIMS["delim8"], is_terminal=True),
+    165: TransitionState("=", [166]),
+    166: TransitionState(DELIMS["delim8"], is_terminal=True),
+
+    # &, &&
+    167: TransitionState("&", [169, 168]),
+    168: TransitionState(DELIMS["delim8"], is_terminal=True),
+    169: TransitionState("&", [170]),
+    170: TransitionState(DELIMS["delim8"], is_terminal=True),
+
+    # ||
+    171: TransitionState("|", [172]),
+    172: TransitionState("|", [173]),
+    173: TransitionState(DELIMS["delim8"], is_terminal=True),
+
+    # { } ( ) [ ]
+    174: TransitionState("{", [175]),
+    175: TransitionState(DELIMS["delim13"], is_terminal=True),
+    176: TransitionState("}", [177]),
+    177: TransitionState(DELIMS["delim14"], is_terminal=True),
+    178: TransitionState("(", [179]),
+    179: TransitionState(DELIMS["delim15"], is_terminal=True),
+    180: TransitionState(")", [181]),
+    181: TransitionState(DELIMS["delim16"], is_terminal=True),
+    182: TransitionState("[", [183]),
+    183: TransitionState(DELIMS["delim17"], is_terminal=True),
+    184: TransitionState("]", [185]),
+    185: TransitionState(DELIMS["delim18"], is_terminal=True),
+
+    # . , : ;
+    186: TransitionState(".", [187]),
+    187: TransitionState(DELIMS["alpha_id"], is_terminal=True),
+    188: TransitionState(",", [189]),
+    189: TransitionState(DELIMS["delim19"], is_terminal=True),
+    190: TransitionState(":", [191]),
+    191: TransitionState(DELIMS["whitespace"], is_terminal=True),
+    192: TransitionState(";", [193]),
+    193: TransitionState(DELIMS["delim20"], is_terminal=True),
+
+    # space, tab, newline
+    194: TransitionState(" ", [195]),
+    195: TransitionState(DELIMS["delim25"], is_terminal=True),
+    196: TransitionState("\t", [197]),
+    197: TransitionState(DELIMS["delim25"], is_terminal=True),
+    198: TransitionState("\n", [199]),
+    199: TransitionState(DELIMS["delim25"], is_terminal=True),
+
+    # id
+    200: TransitionState(DELIMS["alpha_id"], [202, 201]),
+    201: TransitionState(DELIMS["delim21"], is_terminal=True),
+    202: TransitionState(DELIMS["alpha_num"], [204, 203]),
+    203: TransitionState(DELIMS["delim21"], is_terminal=True),
+    204: TransitionState(DELIMS["alpha_num"], [206, 205]),
+    205: TransitionState(DELIMS["delim21"], is_terminal=True),
+    206: TransitionState(DELIMS["alpha_num"], [208, 207]),
+    207: TransitionState(DELIMS["delim21"], is_terminal=True),
+    208: TransitionState(DELIMS["alpha_num"], [210, 209]),
+    209: TransitionState(DELIMS["delim21"], is_terminal=True),
+    210: TransitionState(DELIMS["alpha_num"], [212, 211]),
+    211: TransitionState(DELIMS["delim21"], is_terminal=True),
+    212: TransitionState(DELIMS["alpha_num"], [214, 213]),
+    213: TransitionState(DELIMS["delim21"], is_terminal=True),
+    214: TransitionState(DELIMS["alpha_num"], [216, 215]),
+    215: TransitionState(DELIMS["delim21"], is_terminal=True),
+    216: TransitionState(DELIMS["alpha_num"], [218, 217]),
+    217: TransitionState(DELIMS["delim21"], is_terminal=True),
+    218: TransitionState(DELIMS["alpha_num"], [220, 219]),
+    219: TransitionState(DELIMS["delim21"], is_terminal=True),
+    220: TransitionState(DELIMS["alpha_num"], [222, 221]),
+    221: TransitionState(DELIMS["delim21"], is_terminal=True),
+    222: TransitionState(DELIMS["alpha_num"], [224, 223]),
+    223: TransitionState(DELIMS["delim21"], is_terminal=True),
+    224: TransitionState(DELIMS["alpha_num"], [226, 225]),
+    225: TransitionState(DELIMS["delim21"], is_terminal=True),
+    226: TransitionState(DELIMS["alpha_num"], [228, 227]),
+    227: TransitionState(DELIMS["delim21"], is_terminal=True),
+    228: TransitionState(DELIMS["alpha_num"], [230, 229]),
+    229: TransitionState(DELIMS["delim21"], is_terminal=True),
+    230: TransitionState(DELIMS["alpha_num"], [232, 231]),
+    231: TransitionState(DELIMS["delim21"], is_terminal=True),
+    232: TransitionState(DELIMS["alpha_num"], [234, 233]),
+    233: TransitionState(DELIMS["delim21"], is_terminal=True),
+    234: TransitionState(DELIMS["alpha_num"], [236, 235]),
+    235: TransitionState(DELIMS["delim21"], is_terminal=True),
+    236: TransitionState(DELIMS["alpha_num"], [238, 237]),
+    237: TransitionState(DELIMS["delim21"], is_terminal=True),
+    238: TransitionState(DELIMS["alpha_num"], [239]),
+    239: TransitionState(DELIMS["delim21"], is_terminal=True),
+
+    # meat_lit
+    240: TransitionState(DELIMS["digits"], [242, 270, 241]),
+    241: TransitionState(DELIMS["delim22"], is_terminal=True),
+    242: TransitionState(DELIMS["digits"], [244, 270, 243]),
+    243: TransitionState(DELIMS["delim22"], is_terminal=True),
+    244: TransitionState(DELIMS["digits"], [246, 270, 245]),
+    245: TransitionState(DELIMS["delim22"], is_terminal=True),
+    246: TransitionState(DELIMS["digits"], [248, 270, 247]),
+    247: TransitionState(DELIMS["delim22"], is_terminal=True),
+    248: TransitionState(DELIMS["digits"], [250, 270, 249]),
+    249: TransitionState(DELIMS["delim22"], is_terminal=True),
+    250: TransitionState(DELIMS["digits"], [252, 270, 251]),
+    251: TransitionState(DELIMS["delim22"], is_terminal=True),
+    252: TransitionState(DELIMS["digits"], [254, 270, 253]),
+    253: TransitionState(DELIMS["delim22"], is_terminal=True),
+    254: TransitionState(DELIMS["digits"], [256, 270, 255]),
+    255: TransitionState(DELIMS["delim22"], is_terminal=True),
+    256: TransitionState(DELIMS["digits"], [258, 270, 257]),
+    257: TransitionState(DELIMS["delim22"], is_terminal=True),
+    258: TransitionState(DELIMS["digits"], [260, 270, 259]),
+    259: TransitionState(DELIMS["delim22"], is_terminal=True),
+    260: TransitionState(DELIMS["digits"], [262, 270, 261]),
+    261: TransitionState(DELIMS["delim22"], is_terminal=True),
+    262: TransitionState(DELIMS["digits"], [264, 270, 263]),
+    263: TransitionState(DELIMS["delim22"], is_terminal=True),
+    264: TransitionState(DELIMS["digits"], [266, 270, 265]),
+    265: TransitionState(DELIMS["delim22"], is_terminal=True),
+    266: TransitionState(DELIMS["digits"], [268, 270, 267]),
+    267: TransitionState(DELIMS["delim22"], is_terminal=True),
+    268: TransitionState(DELIMS["digits"], [270, 269]),
+    269: TransitionState(DELIMS["delim22"], is_terminal=True),
+
+    # sauce_lit
+    270: TransitionState(".", [271]),
+    271: TransitionState(DELIMS["digits"], [273, 272]),
+    272: TransitionState(DELIMS["delim22"], is_terminal=True),
+    273: TransitionState(DELIMS["digits"], [275, 274]),
+    274: TransitionState(DELIMS["delim22"], is_terminal=True),
+    275: TransitionState(DELIMS["digits"], [277, 276]),
+    276: TransitionState(DELIMS["delim22"], is_terminal=True),
+    277: TransitionState(DELIMS["digits"], [279, 278]),
+    278: TransitionState(DELIMS["delim22"], is_terminal=True),
+    279: TransitionState(DELIMS["digits"], [281, 280]),
+    280: TransitionState(DELIMS["delim22"], is_terminal=True),
+    281: TransitionState(DELIMS["digits"], [283, 282]),
+    282: TransitionState(DELIMS["delim22"], is_terminal=True),
+    283: TransitionState(DELIMS["digits"], [284]),
+    284: TransitionState(DELIMS["delim22"], is_terminal=True),
+
+    # chop_lit
+    285: TransitionState("'", [286, 287]),
+    286: TransitionState("\\", [(DELIMS["escape_seq"], 287)]),
+    287: TransitionState(DELIMS["ascii1"], [288]),
+    288: TransitionState("'", [289]),
+    289: TransitionState(DELIMS["delim22"], is_terminal=True),
+
+    # recipe_lit
+    290: TransitionState('"', [291, 292, (DELIMS["ascii2"], 290)]),
+    291: TransitionState("\\", [(DELIMS["escape_seq"], 290)]),
+    292: TransitionState('"', [293]),
+    293: TransitionState(DELIMS["delim23"], is_terminal=True),
+
+    # Single-Line Comment
+    294: TransitionState("/", [295, (ASCII3_OR_TAB, 294)]),
+    295: TransitionState("\n", is_terminal=True),
+
+    # Multi-Line Comment
+    296: TransitionState("*", [297, (ASCII4_OR_WHITESPACE, 296)]),
+    297: TransitionState("*", [298, 297, (ASCII4_OR_WHITESPACE, 296)]),
+    298: TransitionState("/", [299]),
+    299: TransitionState(DELIMS["whitespace"], is_terminal=True),
 }
 
-# Status sent to the UI with each error (it counts invalid vs unavailable).
-STATUS = {code: "Unavailable" if code == "LEX-902" else "Invalid" for code in MESSAGES}
-
-BOOLEAN_WORDS = frozenset(["yummy", "yuck"])
-
-# Unterminated literals and comments quote only their first 10 characters.
-SHORTENED_CODES = frozenset(["LEX-201", "LEX-301", "LEX-701"])
-SHORTENED_LENGTH = 10
-
-
-def show_lexeme(lexeme, code=None):
-    """The lexeme as quoted in a message. Newline and tab are written as \\n and
-    \\t; unterminated literals and comments are cut to 10 characters plus "..."."""
-    if code in SHORTENED_CODES and len(lexeme) > SHORTENED_LENGTH:
-        lexeme = lexeme[:SHORTENED_LENGTH] + "..."
-    return lexeme.replace("\n", "\\n").replace("\t", "\\t")
-
-
-def format_message(code, line, col, lexeme):
-    """The one place lexer messages are built: Line <n>, Col <n>: <Error message> '<lexeme>'"""
-    return f"Line {line}, Col {col}: {MESSAGES[code]} '{show_lexeme(lexeme, code)}'"
+ACCEPTING = {
+    6: "again", 11: "case", 15: "chop", 21: "cooked", 29: "default", 31: "do",
+    36: "else", 41: "empty", 47: "fixed", 50: "for", 53: "if", 58: "meat",
+    62: "menu", 67: "pork", 74: "recipe", 80: "sauce", 85: "serve",
+    94: "serveback", 98: "stop", 104: "switch", 110: "taste", 116: "while",
+    122: "yummy", 126: "yuck",
+    128: "=", 130: "==", 132: "+", 134: "++", 136: "+=", 138: "-", 140: "--",
+    142: "-=", 144: "*", 146: "*=", 148: "/", 150: "/=", 152: "%", 154: "%=",
+    156: ">", 158: ">=", 160: "<", 162: "<=", 164: "!", 166: "!=", 168: "&",
+    170: "&&", 173: "||", 175: "{", 177: "}", 179: "(", 181: ")", 183: "[",
+    185: "]", 187: ".", 189: ",", 191: ":", 193: ";",
+    195: SPACE, 197: TAB, 199: NEWLINE,
+    272: SAUCE_LITERAL, 274: SAUCE_LITERAL, 276: SAUCE_LITERAL, 278: SAUCE_LITERAL,
+    280: SAUCE_LITERAL, 282: SAUCE_LITERAL, 284: SAUCE_LITERAL,
+    289: CHOP_LITERAL, 293: RECIPE_LITERAL,
+    295: SINGLE_LINE_COMMENT, 299: MULTI_LINE_COMMENT,
+}
+for state in range(201, 240, 2):
+    ACCEPTING[state] = IDENTIFIER
+for state in range(241, 270, 2):
+    ACCEPTING[state] = MEAT_LITERAL
 
 
 @dataclass
@@ -287,447 +487,178 @@ class Token:
     type: str
     lexeme: str
     line: int
-    col: int
-
-
-@dataclass
-class LexError:
-    code: str
-    status: str
-    title: str
-    line: int
-    col: int
-    lexeme: str
-    message: str
-
-
-@dataclass
-class LexResult:
-    tokens: list = field(default_factory=list)
-    errors: list = field(default_factory=list)
-    # Symbol table: identifier lexeme -> number, in order of first appearance.
-    symbols: dict = field(default_factory=dict)
+    column: int
 
     def to_dict(self):
-        return {
-            "tokens": [asdict(t) for t in self.tokens],
-            "errors": [asdict(e) for e in self.errors],
-            "symbols": dict(self.symbols),
-        }
+        return {"type": self.type, "lexeme": self.lexeme, "line": self.line, "column": self.column}
 
 
-def keyword_reference():
-    """Keyword list for the UI, generated from the same table the lexer uses."""
-    return {
-        "groups": list(KEYWORD_GROUPS),
-        "keywords": [
-            {
-                "word": kw.word,
-                "group": kw.group,
-                "cCounterpart": kw.c_counterpart,
-                "description": kw.description,
-            }
-            for kw in KEYWORDS
-        ],
-    }
+@dataclass
+class LexicalError:
+    lexeme: str
+    message: str
+    line: int
+    column: int
+
+    def to_dict(self):
+        return {"lexeme": self.lexeme, "message": self.message, "line": self.line, "column": self.column}
+
+
+class PorkCCigLexer:
+    def __init__(self, source, debug=False):
+        self.src = source.replace("\r\n", "\n").replace("\r", "\n")
+        self.n = len(self.src)
+        self.pos = 0
+        self.line = 1
+        self.col = 1
+        # Type of the last token, whitespace and comments skipped; "" after an error.
+        self.lookback = ""
+        self.tokens = []
+        self.errors = []
+        self.debug = debug
+        # With debug on: (lexeme, states visited) for every token and error.
+        self.traces = []
+
+    def _peek(self):
+        if self.pos < self.n:
+            return self.src[self.pos]
+        return EOF
+
+    def _advance(self):
+        ch = self.src[self.pos]
+        self.pos += 1
+        if ch == "\n":
+            self.line += 1
+            self.col = 1
+        else:
+            self.col += 1
+        return ch
+
+    @staticmethod
+    def _message(state, ch):
+        if state == 0:
+            return "Unavailable character" if ch in UNAVAILABLE else "Invalid character"
+        elif state == 171:
+            return "Invalid character"
+        elif state == 238 and ch in ALPHA_NUM:
+            return "Identifier exceeds 20 characters"
+        elif 240 <= state <= 268 and ch in DIGITS:
+            return "Meat value exceeds 15 digits"
+        elif 271 <= state <= 283 and ch in DIGITS:
+            return "Sauce decimal part exceeds 7 digits"
+        elif 271 <= state <= 283 and ch == ".":
+            return "Multiple decimal points"
+        elif (240 <= state <= 268 or 271 <= state <= 283) and ch in ALPHA_ID:
+            return "Invalid numerical value"
+        elif state == 270:
+            return "Incomplete decimal value"
+        elif state == 285 and ch == "'":
+            return "Empty character value"
+        elif state == 287 and (ch in DELIMS["ascii1"] or ch == "\\"):
+            return "Too many characters in chop value"
+        elif state == 285 or state == 287:
+            return "Unclosed character value"
+        elif state == 286 or state == 291:
+            return "Invalid escape sequence"
+        elif state == 290:
+            return "Unclosed string value"
+        elif (state == 296 or state == 297) and ch == EOF:
+            return "Unclosed comment"
+        elif state == 294 or state == 296 or state == 297:
+            return "Invalid character in comment"
+        else:
+            return "Invalid delimiter"
+
+    def scan(self):
+        state = 0
+        lexeme = ""
+        line, col = self.line, self.col
+        path = [0]
+        while self.pos < self.n or state != 0:
+            ch = self._peek()
+            target = None
+            for branch in TRANSITIONS[state].branches:
+                if isinstance(branch, tuple):
+                    chars, following = branch
+                else:
+                    chars, following = TRANSITIONS[branch].chars, branch
+                if TRANSITIONS[following].is_terminal if ch == EOF else ch in chars:
+                    target = following
+                    break
+            if state == 137 and ch in DIGITS and self.lookback in OPERAND_END:
+                target = 138
+            if target is not None and not TRANSITIONS[target].is_terminal:
+                lexeme += self._advance()
+                state = target
+                path.append(state)
+                continue
+
+            if target is None:
+                message = self._message(state, ch)
+                if state == 0:
+                    lexeme = self._advance()
+                self.errors.append(LexicalError(lexeme, message, line, col))
+                self.lookback = ""
+            else:
+                self.tokens.append(Token(ACCEPTING[target], lexeme, line, col))
+                path.append(target)
+                if ACCEPTING[target] not in SKIPPED:
+                    self.lookback = ACCEPTING[target]
+            if self.debug:
+                self.traces.append((lexeme, path))
+            state = 0
+            lexeme = ""
+            line, col = self.line, self.col
+            path = [0]
+        return self.tokens, self.errors
 
 
 def tokenize(source):
-    """Run lexical analysis on Pork CCig source text and return a LexResult."""
-    return _Lexer(source).run()
+    return PorkCCigLexer(source).scan()
 
 
-# ---------------------------------------------------------------------------
-# Lexer
-# ---------------------------------------------------------------------------
+def lex(source):
+    return tokenize(source)
 
 
-class _Lexer:
-    def __init__(self, source):
-        # Normalize Windows and old Mac line endings so columns stay correct.
-        self.src = source.replace("\r\n", "\n").replace("\r", "\n")
-        self.n = len(self.src)
-        self.i = 0
-        self.line = 1
-        self.col = 1
-        # Index of the last character of the last token or error that was not
-        # whitespace or a comment; -1 at the start of input. Feeds lookback().
-        self.last_index = -1
-        self.result = LexResult()
+if __name__ == "__main__":
+    def show(title, source):
+        lexer = PorkCCigLexer(source, debug=True)
+        tokens, errors = lexer.scan()
+        print(f"== {title} ==")
+        print(source)
+        print("-- tokens (whitespace not shown) --")
+        for token in tokens:
+            if token.type != SPACE and token.type != TAB and token.type != NEWLINE:
+                print(f"  {token.line:>2}:{token.column:<3} {token.type:<20} {token.lexeme!r}")
+        print(f"-- {len(errors)} error(s) --")
+        for error in errors:
+            print(f"  Line {error.line}, Col {error.column}: {error.message} {error.lexeme!r}")
+        print("-- states visited by the first lexeme --")
+        print(f"  {lexer.traces[0][0]!r}: {' -> '.join(str(s) for s in lexer.traces[0][1])}")
+        print()
 
-    # -- helpers -------------------------------------------------------------
+    show("Valid program", (
+        "serveback 0;\n"
+        "// main program\n"
+        "empty pork() {\n"
+        "    meat servings = -5, meatball = 10;\n"
+        "    sauce price = 150.50;\n"
+        "    chop grade = 'A';\n"
+        "    cooked ready = yummy;\n"
+        "    /* loop\n"
+        "       over orders */\n"
+        "    while(servings <= meatball && ready) {\n"
+        "        serve(\"Price: &f\\n\", price - 1);\n"
+        "        servings++;\n"
+        "    }\n"
+        "}\n"
+    ))
 
-    def char_at(self, index):
-        return self.src[index] if 0 <= index < self.n else None
-
-    # The three pointers: current is src[i]; lookahead peeks src[i + 1] without
-    # consuming it; lookback is the previous non-whitespace character. Both
-    # helpers return '' past either end of the input instead of raising.
-    def current(self):
-        return self.src[self.i] if self.i < self.n else ""
-
-    def lookahead(self):
-        return self.src[self.i + 1] if self.i + 1 < self.n else ""
-
-    def lookback(self):
-        # Spaces, tabs, newlines and comments are skipped, so "x - 234" and
-        # "x /* note */ - 234" both look back to "x".
-        return self.src[self.last_index] if self.last_index >= 0 else ""
-
-    def remember(self, end, is_trivia):
-        if not is_trivia and end > self.i:
-            self.last_index = end - 1
-
-    def advance_to(self, end):
-        """Consume characters up to (not including) index `end`."""
-        while self.i < end:
-            if self.src[self.i] == "\n":
-                self.line += 1
-                self.col = 1
-            else:
-                self.col += 1
-            self.i += 1
-
-    def emit(self, token_type, end):
-        if not is_token_type(token_type):
-            raise AssertionError(f"Unknown token type {token_type!r}; it is not in TOKEN_TYPES.")
-        self.result.tokens.append(Token(token_type, self.src[self.i:end], self.line, self.col))
-        self.remember(end, token_type in TRIVIA)
-        self.advance_to(end)
-
-    def position_of(self, index):
-        """(line, col) of src[index], counted from the current position."""
-        line, col = self.line, self.col
-        for ch in self.src[self.i:index]:
-            line, col = (line + 1, 1) if ch == "\n" else (line, col + 1)
-        return line, col
-
-    def fail(self, code, end, char_index=None):
-        """Report an error covering src[i:end] and resume scanning at `end`.
-        With char_index (a bad character inside a literal or comment), the
-        message names that one character at its own line and column."""
-        lexeme = self.src[self.i:end]
-        if char_index is None:
-            message = format_message(code, self.line, self.col, lexeme)
-        else:
-            message = format_message(code, *self.position_of(char_index), self.src[char_index])
-        self.result.errors.append(
-            LexError(code, STATUS[code], MESSAGES[code], self.line, self.col, lexeme, message)
-        )
-        is_trivia = lexeme.isspace() or lexeme.startswith(("//", "/*"))
-        self.remember(end, is_trivia)
-        self.advance_to(end)
-
-    def delimiter_ok(self, end, delimiter):
-        # End of input is accepted as a delimiter for every token.
-        nxt = self.char_at(end)
-        if nxt is None:
-            return True
-        # Group decision: a comment may follow any token directly (comment rule 6,
-        # p. 65), e.g. "x=5;//note", even though most delimiter sets on p. 73 have
-        # no "/". A lone "/" still has to be in the token's delimiter set.
-        if nxt == "/" and self.char_at(end + 1) in ("/", "*"):
-            return True
-        return nxt in DELIMITERS[delimiter]
-
-    def find_closing_quote(self, start, quote):
-        """Index of the closing quote on the same line, or None. A backslash
-        skips the next character unless that character is a newline."""
-        j = start
-        while j < self.n:
-            ch = self.src[j]
-            if ch == "\n":
-                return None
-            if ch == "\\" and j + 1 < self.n and self.src[j + 1] != "\n":
-                j += 2
-                continue
-            if ch == quote:
-                return j
-            j += 1
-        return None
-
-    def end_of_line(self, start):
-        j = self.src.find("\n", start)
-        return self.n if j == -1 else j
-
-    # -- main loop -------------------------------------------------------------
-
-    def run(self):
-        # Each pass reads the pointers fresh: i only moves forward inside emit()
-        # and fail() (via advance_to), and both of those also update lookback.
-        while self.i < self.n:
-            ch = self.current()
-            nxt = self.lookahead()
-            nxt_is_digit = nxt != "" and nxt in DIGITS
-            if ch in WHITESPACE_TOKENS:
-                self.lex_whitespace()
-            elif ch in ALPHA_ID:
-                self.lex_word()
-            elif ch in DIGITS:
-                self.lex_number()
-            elif ch == "-":
-                self.lex_minus(nxt, nxt_is_digit)
-            elif ch == "." and nxt_is_digit:
-                # ".5": sauce rule 7 needs a digit before the point. One error
-                # for the whole malformed number, e.g. Invalid '.5'.
-                self.fail("LEX-105", self.number_chunk_end(self.i + 1))
-            elif ch == "'":
-                self.lex_chop()
-            elif ch == '"':
-                self.lex_recipe()
-            elif ch == "/" and nxt == "/":
-                self.lex_single_line_comment()
-            elif ch == "/" and nxt == "*":
-                self.lex_multi_line_comment()
-            else:
-                self.lex_symbol()
-        return self.result
-
-    # -- minus: decrement, subtraction or negative literal --------------------
-
-    def lex_minus(self, lookahead, lookahead_is_digit):
-        # 1. "--" or "-=" (longest match): checked first, so "--234" is a
-        #    decrement followed by 234, never "-" and "-234".
-        if lookahead in ("-", "="):
-            self.lex_symbol()
-        # 2. "-" + digit where the lookback character does not end an operand
-        #    (start of input, an operator, "(", ",", "=", ";", "{", ...):
-        #    a negative literal such as "-234" or "-3.14"; its column is the "-".
-        elif lookahead_is_digit and self.lookback() not in OPERAND_END_CHARS:
-            self.lex_number()
-        # 3. Otherwise plain subtraction or unary minus, e.g. "x-1" or "-x".
-        else:
-            self.lex_symbol()
-
-    # -- whitespace ------------------------------------------------------------
-
-    def lex_whitespace(self):
-        end = self.i + 1
-        nxt = self.char_at(end)
-        # A character that starts no token is reported once (LEX-901/902), rather
-        # than also as a bad delimiter after the whitespace before it.
-        if self.delimiter_ok(end, WHITESPACE_DELIMITER) or nxt not in TOKEN_START:
-            self.emit(WHITESPACE_TOKENS[self.src[self.i]], end)
-        else:
-            self.fail("LEX-602", end)
-
-    # -- reserved words and identifiers --------------------------------------
-
-    def lex_word(self):
-        end = self.i
-        while end < self.n and self.src[end] in ALPHA_NUMERIC:
-            end += 1
-        word = self.src[self.i:end]
-
-        # A reserved word only matches as the complete run: "meatball" is an id.
-        if word in KEYWORD_DELIMITER:
-            if self.delimiter_ok(end, KEYWORD_DELIMITER[word]):
-                self.emit(word, end)
-            elif word in BOOLEAN_WORDS:
-                self.fail("LEX-402", end)  # yummy( or yuck{: not in delim6
-            else:
-                self.fail("LEX-401", end)
-            return
-
-        if len(word) > MAX_IDENTIFIER_LENGTH:
-            cut = self.i + MAX_IDENTIFIER_LENGTH
-            self.fail("LEX-501", cut)
-        elif not self.delimiter_ok(end, ID_DELIMITER):
-            if self.char_at(end) in TOKEN_START:
-                self.fail("LEX-502", end)  # a{: a real token follows, so only the id is wrong
-            else:
-                self.fail("LEX-503", self.bad_identifier_end(end))  # a$b: one error
-        else:
-            # Numbered by first appearance; a repeat keeps its number. Only valid
-            # identifiers reach here, so errors never use up a number.
-            symbols = self.result.symbols
-            number = symbols.setdefault(word, len(symbols) + 1)
-            self.emit(f"{ID}{number}", end)
-
-    def bad_identifier_end(self, j):
-        """End of an identifier glued to characters that start no token: the bad
-        characters and any letters, digits or _ after them ("a$b", "x#1y")."""
-        while j < self.n and (self.src[j] in ALPHA_NUMERIC or self.src[j] not in TOKEN_START):
-            j += 1
-        return j
-
-    # -- meat and sauce literals -----------------------------------------------
-
-    def number_chunk_end(self, j):
-        """Index of the first delim22 character (or end of input) from j on.
-        "." is not in delim22, so extra decimal points stay inside the chunk."""
-        while j < self.n and self.src[j] not in DELIMITERS[NUMBER_DELIMITER]:
-            j += 1
-        return j
-
-    def lex_number(self):
-        """State machine for meat/sauce literals, one character of lookahead.
-
-        Two kinds of error recovery:
-          * Digit limits (LEX-101/102/103), the professor's rule: the part read
-            so far is the error and scanning restarts at the next character.
-          * Malformed numbers (LEX-104/106/107): the whole chunk up to the next
-            delim22 character is ONE error, e.g. Invalid '12.3.4'. The
-            delimiter itself is never consumed.
-        """
-        start = self.i
-        j = start + 1 if self.src[start] == "-" else start
-        int_start = j
-        while j < self.n and self.src[j] in DIGITS and j - int_start < MAX_MEAT_DIGITS:
-            j += 1
-        int_count = j - int_start
-        nxt = self.char_at(j)
-
-        if nxt is not None and nxt in DIGITS:
-            # Restart rule as before; the message depends on whether the digit
-            # run turns out to be a sauce whole part (a "." follows it).
-            k = j
-            while k < self.n and self.src[k] in DIGITS:
-                k += 1
-            self.fail("LEX-102" if self.char_at(k) == "." else "LEX-101", j)
-            return
-
-        token_type = MEAT_LIT
-        if nxt == ".":
-            # With both limits at 15 this can't trigger (a 16th digit is caught
-            # first); it stays in case the sauce limit is set lower again.
-            if int_count > MAX_SAUCE_WHOLE_DIGITS:
-                self.fail("LEX-102", j)
-                return
-            j += 1  # the "."
-            nxt = self.char_at(j)
-            if nxt is None or nxt not in DIGITS:
-                code = "LEX-106" if nxt == "." else "LEX-104"  # "1..2" or "5."
-                self.fail(code, self.number_chunk_end(j))
-                return
-            frac_start = j
-            while j < self.n and self.src[j] in DIGITS and j - frac_start < MAX_SAUCE_DECIMAL_DIGITS:
-                j += 1
-            nxt = self.char_at(j)
-            if nxt is not None and nxt in DIGITS:
-                self.fail("LEX-103", j)
-                return
-            if nxt == ".":
-                self.fail("LEX-106", self.number_chunk_end(j))  # "12.3.4"
-                return
-            token_type = SAUCE_LIT
-
-        if nxt is not None and nxt in ALPHA_ID:
-            self.fail("LEX-107", self.number_chunk_end(j))  # "12abc", "3.14abc"
-        elif not self.delimiter_ok(j, NUMBER_DELIMITER):
-            self.fail("LEX-108", j)
-        else:
-            self.emit(token_type, j)
-
-    # -- chop and recipe literals ----------------------------------------------
-
-    @staticmethod
-    def literal_body(body, is_valid_char):
-        """Return (char_count, problem, k). problem is None when the body is fine,
-        "escape" for a backslash not followed by n t ' " \\ 0, or "char" for a
-        character outside the ASCII set (including $ ? @ ^). k is the index of
-        the problem in body."""
-        count = 0
-        k = 0
-        while k < len(body):
-            ch = body[k]
-            if ch == "\\":
-                esc = body[k + 1] if k + 1 < len(body) else ""
-                if esc == "" or esc not in ESCAPE_SEQ:
-                    return count, "escape", k
-                k += 2
-            elif is_valid_char(ch):
-                k += 1
-            else:
-                return count, "char", k
-            count += 1
-        return count, None, k
-
-    def fail_bad_char(self, end, index):
-        """One error covering src[i:end] for the bad character at src[index]."""
-        code = "LEX-902" if self.src[index] in UNAVAILABLE else "LEX-901"
-        self.fail(code, end, index)
-
-    def lex_chop(self):
-        close = self.find_closing_quote(self.i + 1, "'")
-        if close is None:
-            self.fail("LEX-201", self.end_of_line(self.i))
-            return
-        end = close + 1
-        body = self.src[self.i + 1:close]
-        if body == "":
-            self.fail("LEX-202", end)
-            return
-        # State 285 -> 287 on ascii1, which includes the space (ASCII 32).
-        count, problem, k = self.literal_body(body, _is_ascii1)
-        if problem == "escape":
-            self.fail("LEX-204", end)
-        elif problem:
-            self.fail_bad_char(end, self.i + 1 + k)
-        elif count != 1:
-            self.fail("LEX-203", end)
-        elif not self.delimiter_ok(end, CHOP_DELIMITER):
-            self.fail("LEX-205", end)
-        else:
-            self.emit(CHOP_LIT, end)
-
-    def lex_recipe(self):
-        close = self.find_closing_quote(self.i + 1, '"')
-        if close is None:
-            self.fail("LEX-301", self.end_of_line(self.i))
-            return
-        end = close + 1
-        _, problem, k = self.literal_body(self.src[self.i + 1:close], _is_ascii2)
-        if problem == "escape":
-            self.fail("LEX-302", end)
-        elif problem:
-            self.fail_bad_char(end, self.i + 1 + k)
-        elif not self.delimiter_ok(end, RECIPE_DELIMITER):
-            self.fail("LEX-303", end)
-        else:
-            self.emit(RECIPE_LIT, end)
-
-    # -- comments ----------------------------------------------------------------
-
-    def lex_single_line_comment(self):
-        # Runs to the end of the line; the newline itself becomes its own token.
-        end = self.end_of_line(self.i)
-        for k in range(self.i + 2, end):
-            ch = self.src[k]
-            if not (_is_ascii3(ch) or ch == "\t"):
-                self.fail_bad_char(end, k)
-                return
-        self.emit(SINGLE_LINE_COMMENT, end)
-
-    def lex_multi_line_comment(self):
-        close = self.src.find("*/", self.i + 2)
-        if close == -1:
-            self.fail("LEX-701", self.n)
-            return
-        end = close + 2
-        for k in range(self.i + 2, close):
-            ch = self.src[k]
-            if not (_is_ascii4(ch) or ch in WHITESPACE):
-                self.fail_bad_char(end, k)
-                return
-        if self.delimiter_ok(end, MULTI_LINE_COMMENT_DELIMITER):
-            self.emit(MULTI_LINE_COMMENT, end)
-        else:
-            self.fail("LEX-703", end)
-
-    # -- reserved symbols ----------------------------------------------------------
-
-    def lex_symbol(self):
-        for symbol in SYMBOLS_LONGEST_FIRST:
-            if self.src.startswith(symbol, self.i):
-                end = self.i + len(symbol)
-                if self.delimiter_ok(end, DIAGRAM_SYMBOLS[symbol]):
-                    self.emit(symbol, end)
-                else:
-                    self.fail("LEX-602", end)
-                return
-        ch = self.src[self.i]
-        if ch == "|":
-            self.fail("LEX-601", self.i + 1)
-        else:
-            self.fail_bad_char(self.i + 1, self.i)
+    show("Error recovery", (
+        "meat; x = 12abc;\n"
+        "sauce s = 1.12345678 + 5.;\n"
+        "chop c = 'ab'; recipe r = \"unclosed\n"
+        "a $ b | c;\n"
+        "meat this_identifier_is_too_long = 1234567890123456;\n"
+    ))
