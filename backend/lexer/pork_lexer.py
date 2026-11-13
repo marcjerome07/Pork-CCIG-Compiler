@@ -582,7 +582,11 @@ class PorkCCigLexer:
                     chars, following = branch
                 else:
                     chars, following = TRANSITIONS[branch].chars, branch
-                if TRANSITIONS[following].is_terminal if ch == EOF else ch in chars:
+                if ch == EOF:
+                    matched = TRANSITIONS[following].is_terminal
+                else:
+                    matched = ch in chars
+                if matched:
                     target = following
                     break
             if state == 137 and ch in DIGITS and self.lookback in OPERAND_END:
