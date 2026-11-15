@@ -75,13 +75,36 @@ def keyword_reference():
 SHORTENED_LENGTH = 10
 
 
-def format_message(error):
-    """Every error message reads:  Line <n>, Col <n>: <Error message> '<lexeme>'"""
+def visible(text):
+    return text.replace("\n", "\\n").replace("\t", "\\t")
+
+
+def describe(error):
+    """The error message with the text at fault in quotes.
+
+    Most errors quote the lexeme that was read. Where the fault is the
+    character after the lexeme, that character is quoted instead.
+    """
     lexeme = error.lexeme
+    found = error.found
+    if error.message == "Invalid delimiter":
+        culprit = f"'{visible(found)}'" if found else "end of file"
+        return f"{error.message} {culprit} after '{visible(lexeme)}'"
+    if error.message == "Invalid character in comment":
+        return f"{error.message} '{visible(found)}'"
+    if error.message == "Invalid escape sequence":
+        # Only a visible character is shown after the backslash.
+        return f"{error.message} '\\{found.strip()}'"
+    if error.message == "Invalid numerical value":
+        return f"{error.message} '{lexeme}{found}'"
     if error.message.startswith("Unclosed") and len(lexeme) > SHORTENED_LENGTH:
         lexeme = lexeme[:SHORTENED_LENGTH] + "..."
-    lexeme = lexeme.replace("\n", "\\n").replace("\t", "\\t")
-    return f"Line {error.line}, Col {error.column}: {error.message} '{lexeme}'"
+    return f"{error.message} '{visible(lexeme)}'"
+
+
+def format_message(error):
+    """Every error message reads:  Line <n>, Col <n>: <Error message> '<text at fault>'"""
+    return f"Line {error.line}, Col {error.column}: {describe(error)}"
 
 
 def lex_response(source):

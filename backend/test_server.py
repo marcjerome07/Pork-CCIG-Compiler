@@ -26,11 +26,15 @@ class ServerTests(unittest.TestCase):
 
     def test_error_messages(self):
         cases = (
-            ("meat;", "Line 1, Col 1: Invalid delimiter 'meat'", "Invalid"),
+            ("meat;", "Line 1, Col 1: Invalid delimiter ';' after 'meat'", "Invalid"),
+            ("a;|", "Line 1, Col 2: Invalid delimiter '|' after ';'", "Invalid"),
+            ("12abc;", "Line 1, Col 1: Invalid numerical value '12a'", "Invalid"),
+            ("'\\q'", "Line 1, Col 1: Invalid escape sequence '\\q'", "Invalid"),
+            ("// café", "Line 1, Col 1: Invalid character in comment 'é'", "Invalid"),
             ("$", "Line 1, Col 1: Unavailable character '$'", "Unavailable"),
             ("1.12345678", "Line 1, Col 1: Sauce decimal part exceeds 7 digits '1.1234567'", "Invalid"),
             ('"123456789012', "Line 1, Col 1: Unclosed string value '\"123456789...'", "Invalid"),
-            ("x\n.", "Line 1, Col 2: Invalid delimiter '\\n'", "Invalid"),
+            ("x\n.", "Line 1, Col 2: Invalid delimiter '.' after '\\n'", "Invalid"),
         )
         for source, message, status in cases:
             error = lex_response(source)["errors"][0]

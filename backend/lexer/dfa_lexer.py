@@ -1573,6 +1573,9 @@ class LexicalError:
     message: str
     line: int
     column: int
+    # The character that stopped the lexer (EOF at the end of the source). For
+    # a character no diagram starts with, it is the lexeme itself.
+    found: str = ""
 
 
 class PorkCCigLexer:
@@ -1659,7 +1662,7 @@ class PorkCCigLexer:
                 message = self._message(state, ch)
                 if state == 0:
                     lexeme = self._advance()
-                self.errors.append(LexicalError(lexeme, message, line, col))
+                self.errors.append(LexicalError(lexeme, message, line, col, ch))
             else:
                 self.tokens.append(Token(kind, lexeme, line, col))
                 path.append(target)
