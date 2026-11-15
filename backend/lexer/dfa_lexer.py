@@ -1,10 +1,6 @@
 """Pork CCig lexical analyzer: one DFA, states 0-299, written as if/elif transitions.
 
     tokens, errors = tokenize(source)
-
-Run this file directly for a demonstration:
-
-    py backend/lexer/dfa_lexer.py
 """
 
 from dataclasses import dataclass
