@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 import { errorRanges, errorsByLine, highlightSegments, rangeAt } from '../errorRanges.js';
+import { deletePairEdit, openEdit, overtypeEdit } from '../autoClose.js';
 import { CLOSERS, INDENT, closerEdit, indentLinesEdit, newlineEdit } from '../indentation.js';
 import { fetchKeywords, lexSource } from '../lexerApi.js';
 import { readStorage, writeStorage } from '../storage.js';
@@ -134,8 +135,9 @@ const CodeEditor = forwardRef(function CodeEditor(
 
   // Syntax colors: the text is lexed by the same Python lexer the Run button uses,
   // a moment after typing pauses. Until the answer arrives, the previous colors
-  // are shifted to fit the edit, so typing never waits on the lexer.
-  const [lexed, setLexed] = useState({ text: '', tokens: [], errors: [] });
+  // are shifted to fit the edit, so typing never waits on the lexer. Errors are
+  // not shown here; they only appear after Run.
+  const [lexed, setLexed] = useState({ text: '', tokens: [] });
   const [dataTypes, setDataTypes] = useState(() => new Set());
 
   useEffect(() => {
@@ -149,14 +151,14 @@ const CodeEditor = forwardRef(function CodeEditor(
 
   useEffect(() => {
     if (!value) {
-      setLexed({ text: '', tokens: [], errors: [] });
+      setLexed({ text: '', tokens: [] });
       return undefined;
     }
     let stale = false;
     const timer = setTimeout(() => {
       lexSource(value)
         .then((result) => {
-          if (!stale) setLexed({ text: value, tokens: result.tokens, errors: result.errors });
+          if (!stale) setLexed({ text: value, tokens: result.tokens });
         })
         .catch(() => {});
     }, HIGHLIGHT_DELAY_MS);
@@ -167,7 +169,7 @@ const CodeEditor = forwardRef(function CodeEditor(
   }, [value]);
 
   const lexedSpans = useMemo(
-    () => lexSpans(lexed.text, lexed.tokens, lexed.errors, dataTypes),
+    () => lexSpans(lexed.text, lexed.tokens, dataTypes),
     [lexed, dataTypes]
   );
   const syntaxLines = useMemo(
@@ -315,6 +317,12 @@ const CodeEditor = forwardRef(function CodeEditor(
     updateCaretLine();
   };
 
+  // Reset button: empties the source code. Done as an edit, so Ctrl/Cmd + Z brings it back.
+  const clearSource = () => {
+    textareaRef.current.focus();
+    applyEdit({ start: 0, end: textareaRef.current.value.length, text: '', selStart: 0, selEnd: 0 });
+  };
+
   const handleKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && (e.key === '=' || e.key === '+')) {
@@ -368,6 +376,22 @@ const CodeEditor = forwardRef(function CodeEditor(
     if (e.key === 'Enter') {
       e.preventDefault();
       applyEdit(newlineEdit(ta.value, start, end));
+      return;
+    }
+    if (e.key === 'Backspace') {
+      const edit = deletePairEdit(ta.value, start, end);
+      if (edit) {
+        e.preventDefault();
+        applyEdit(edit);
+      }
+      return;
+    }
+    // Auto-closing pairs, like VS Code: ( [ { " ' type their closer too, and
+    // typing a closer that is already next steps over it.
+    const pairEdit = overtypeEdit(ta.value, start, end, e.key) ?? openEdit(ta.value, start, end, e.key);
+    if (pairEdit) {
+      e.preventDefault();
+      applyEdit(pairEdit);
       return;
     }
     if (CLOSERS.has(e.key)) {
@@ -446,15 +470,21 @@ const CodeEditor = forwardRef(function CodeEditor(
               type="button"
               className="btn btn-text"
               onMouseDown={keepFocus}
-              onClick={resetZoom}
-              disabled={fontSize === DEFAULT_FONT}
-              title="Reset Zoom (Ctrl/Cmd + 0)"
+              onClick={clearSource}
+              disabled={!value}
+              title="Clear the source code (Ctrl/Cmd + Z to undo)"
             >
               Reset
             </button>
           </div>
-          <button type="button" className="btn btn-primary" onClick={onRun} disabled={running}>
-            <span aria-hidden="true">▶</span> {running ? 'Running Lexer…' : 'Run Lexer'}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onRun}
+            disabled={running}
+            title="Run lexical and syntax analysis"
+          >
+            <span aria-hidden="true">▶</span> {running ? 'Running…' : 'Run'}
           </button>
         </div>
       </div>

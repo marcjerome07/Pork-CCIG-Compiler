@@ -3,8 +3,6 @@
 // Lexer Table. This file only maps token types to color groups; the colors
 // themselves are the --syn-* CSS variables in styles.css.
 
-import { errorRanges } from './errorRanges.js';
-
 const WHITESPACE_TYPES = new Set(['space', 'newline', 'tab']);
 const COMMENT_TYPES = new Set(['Single-Line Comment', 'Multi-Line Comment']);
 const NUMBER_TYPES = new Set(['meat_lit', 'sauce_lit']);
@@ -33,9 +31,10 @@ function lineStarts(text) {
 }
 
 // Colored character ranges { start, end, group } for `text`, sorted by start.
-// Lexer errors become "invalid" ranges. Like errorRanges, (line, col) maps
-// straight to an offset, and anything whose lexeme no longer matches is dropped.
-export function lexSpans(text, tokens, errors, dataTypes) {
+// Lexer errors are left plain here: they are only marked after Run (the error
+// layer). Like errorRanges, (line, col) maps straight to an offset, and anything
+// whose lexeme no longer matches is dropped.
+export function lexSpans(text, tokens, dataTypes) {
   const starts = lineStarts(text);
   const spans = [];
   for (const token of tokens) {
@@ -45,9 +44,6 @@ export function lexSpans(text, tokens, errors, dataTypes) {
     const start = lineStart + token.col - 1;
     const end = start + token.lexeme.length;
     if (text.slice(start, end) === token.lexeme) spans.push({ start, end, group });
-  }
-  for (const range of errorRanges(text, errors)) {
-    spans.push({ start: range.start, end: range.end, group: 'invalid' });
   }
   return spans.sort((a, b) => a.start - b.start);
 }

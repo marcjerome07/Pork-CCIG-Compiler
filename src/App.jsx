@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import CodeEditor from './components/CodeEditor.jsx';
 import ConsolePanel from './components/ConsolePanel.jsx';
 import KeywordReference from './components/KeywordReference.jsx';
+import PhaseTabs from './components/PhaseTabs.jsx';
 import TokenTable from './components/TokenTable.jsx';
 import ThemeToggle from './components/ThemeToggle.jsx';
 import { lexSource } from './lexerApi.js';
@@ -10,42 +11,81 @@ import { readStorage, writeStorage } from './storage.js';
 // New key so browsers that saved the old light default pick up dark. Keep in sync with index.html.
 const THEME_KEY = 'pork-theme-v2';
 
+// The compiler phases shown as tabs. Run always performs every phase in order.
+const PHASES = [
+  { id: 'lexical', label: 'Lexical' },
+  { id: 'syntax', label: 'Syntax' },
+];
+
+const NO_RUN = { status: 'idle' };
+
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
-// Summary line, then each error message exactly as the lexer wrote it.
-function summarize(tokens, errors) {
-  const tokenText = plural(tokens.length, 'token');
+// Console lines for one phase: a summary line, then each error message exactly
+// as the analyzer wrote it ("Line <n>, Col <n>: ..."). Clicking an error line
+// selects it in the source code.
+function summarize(phase, tokens, errors) {
+  const name = phase === 'lexical' ? 'Lexical' : 'Syntax';
+  const tokenText = phase === 'lexical' ? `${plural(tokens.length, 'token')}, ` : '';
   if (errors.length === 0) {
-    return [{ kind: 'ok', text: `Lexical analysis complete: ${tokenText}, 0 errors.` }];
+    return [{ kind: 'ok', text: `No ${name.toLowerCase()} errors: ${tokenText}0 errors.` }];
+  }
+  let counts = '';
+  if (phase === 'lexical') {
+    const unavailable = errors.filter((e) => e.status === 'Unavailable').length;
+    counts = ` (${errors.length - unavailable} invalid, ${unavailable} unavailable)`;
   }
   return [
-    {
-      kind: 'warn',
-      text:
-        `Lexical analysis complete with errors: ${tokenText}, ${plural(errors.length, 'error')} ` +
-        `(${errors.filter((e) => e.status === 'Invalid').length} invalid, ` +
-        `${errors.filter((e) => e.status === 'Unavailable').length} unavailable).`,
-    },
+    { kind: 'warn', text: `${name} analysis complete with errors: ${tokenText}${plural(errors.length, 'error')}${counts}.` },
     ...errors.map((e) => ({ kind: 'error', text: e.message, error: e })),
   ];
+}
+
+// What the console shows for `phase` after `run` (see the run states below).
+function consoleLines(phase, run) {
+  if (run.status === 'idle') return [];
+  if (run.status === 'empty') return [{ kind: 'info', text: 'No source code to analyze.' }];
+  if (run.status === 'failed') return [{ kind: 'error', text: run.message }];
+  if (phase === 'lexical') return summarize('lexical', run.tokens, run.lexErrors);
+  const { syntax } = run;
+  if (syntax.status === 'skipped') {
+    return [{ kind: 'warn', text: 'Syntax analysis skipped: fix the lexical errors first.' }];
+  }
+  if (syntax.status === 'unavailable') {
+    return [{ kind: 'info', text: 'Syntax analysis is not available yet.' }];
+  }
+  return summarize('syntax', run.tokens, syntax.status === 'error' ? syntax.errors : []);
 }
 
 export default function App() {
   const [theme, setTheme] = useState(() =>
     readStorage(THEME_KEY, 'dark') === 'light' ? 'light' : 'dark'
   );
+  const [tab, setTab] = useState('lexical');
   const [source, setSource] = useState('');
-  const [tokens, setTokens] = useState([]);
-  const [consoleLines, setConsoleLines] = useState([]);
   const [running, setRunning] = useState(false);
-  // Errors from the last run, with the exact source they were found in.
-  const [lexed, setLexed] = useState({ source: null, errors: [] });
+  // The last run, with the exact source it analyzed:
+  //   { status: 'idle' }                      nothing run yet
+  //   { status: 'empty' }                     run with no source code
+  //   { status: 'failed', message }           the server could not be reached
+  //   { status: 'done', source, tokens, lexErrors, syntax }
+  // syntax: { status: 'skipped' } when the lexer found errors,
+  //         { status: 'unavailable' } until the parser exists,
+  //         { status: 'ok' } or { status: 'error', errors } once it does.
+  const [run, setRun] = useState(NO_RUN);
   const editorRef = useRef(null);
 
-  // Highlights only apply to the text that was analyzed; editing hides them
-  // until the next run (undoing back to that text shows them again).
+  const tokens = run.status === 'done' ? run.tokens : [];
+
+  // Highlights only apply to the text that was analyzed, and only for the phase
+  // whose tab is open. Editing hides them until the next run (undoing back to
+  // that text shows them again).
   const noErrors = useMemo(() => [], []);
-  const editorErrors = lexed.source === source ? lexed.errors : noErrors;
+  let editorErrors = noErrors;
+  if (run.status === 'done' && run.source === source) {
+    if (tab === 'lexical') editorErrors = run.lexErrors;
+    else if (run.syntax.status === 'error') editorErrors = run.syntax.errors;
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -57,22 +97,22 @@ export default function App() {
     setRunning(true);
     try {
       if (source.length === 0) {
-        setTokens([]);
-        setLexed({ source: null, errors: [] });
-        setConsoleLines([{ kind: 'info', text: 'No source code to analyze.' }]);
+        setRun({ status: 'empty' });
         return;
       }
       const result = await lexSource(source);
       // The lexer still tokenizes spaces (its delimiter rules need them); they
       // are just left out of the Lexer Table and the token count.
       const shown = result.tokens.filter((t) => t.type !== 'space');
-      setTokens(shown);
-      setLexed({ source, errors: result.errors });
-      setConsoleLines(summarize(shown, result.errors));
+      const lexErrors = result.errors;
+      // The parser only runs on a program with no lexical errors.
+      const syntax = lexErrors.length > 0 ? { status: 'skipped' } : { status: 'unavailable' };
+      setRun({ status: 'done', source, tokens: shown, lexErrors, syntax });
+      // Open the first phase that found errors.
+      if (lexErrors.length > 0) setTab('lexical');
+      else if (syntax.status === 'error') setTab('syntax');
     } catch (err) {
-      setTokens([]);
-      setLexed({ source: null, errors: [] });
-      setConsoleLines([{ kind: 'error', text: err.message }]);
+      setRun({ status: 'failed', message: err.message });
     } finally {
       setRunning(false);
     }
@@ -105,10 +145,11 @@ export default function App() {
         />
         <div className="side-column">
           <KeywordReference />
-          <TokenTable tokens={tokens} />
+          <TokenTable tokens={tokens} title={tab === 'syntax' ? 'Tokens' : 'Lexer Table'} />
         </div>
         <ConsolePanel
-          lines={consoleLines}
+          tabs={<PhaseTabs phases={PHASES} active={tab} onSelect={setTab} />}
+          lines={consoleLines(tab, run)}
           onSelectError={(error) => editorRef.current?.revealError(error)}
         />
       </main>

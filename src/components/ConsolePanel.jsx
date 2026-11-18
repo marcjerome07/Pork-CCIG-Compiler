@@ -1,7 +1,10 @@
-export default function ConsolePanel({ lines, onSelectError }) {
+// `tabs` (the phase tabs) sit on the panel's top edge like folder tabs; the
+// output below belongs to the open tab.
+export default function ConsolePanel({ tabs, lines, onSelectError }) {
   return (
     <section className="panel console-panel" aria-labelledby="console-title">
-      <div className="panel-header">
+      <div className="panel-header console-header">
+        {tabs}
         <h2 id="console-title" className="panel-title">Console Output</h2>
       </div>
       <div className="console-body" role="log" aria-live="polite">

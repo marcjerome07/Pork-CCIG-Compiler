@@ -88,7 +88,6 @@
   --syn-comment: #2f7d32;
   --syn-operator: #374151;
   --syn-delimiter: #6b7280;
-  --syn-invalid: #c72e0f;
 }
 
 :root[data-theme='dark'] {
@@ -100,7 +99,6 @@
   --syn-comment: #7fb069;
   --syn-operator: #d4d8e8;
   --syn-delimiter: #8f9bc7;
-  --syn-invalid: #ff6b6b;
 }
 
 /* ---------- Base ---------- */
@@ -178,6 +176,65 @@ body {
   display: block;
   height: 42px;
   width: auto;
+}
+
+/* ---------- Phase tabs (folder tabs on the console panel) ---------- */
+/* The header has no background or border of its own: the line under the tabs is
+   drawn by the tabs themselves and by the space around them, and the open tab
+   leaves it out so it joins the output below. */
+.console-header {
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0;
+  padding: 8px 0 0;
+  background: transparent;
+  border-bottom: 0;
+}
+.phase-tabs {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+.phase-tabs::before,
+.phase-tabs::after {
+  content: '';
+  border-bottom: 1px solid var(--border);
+}
+.phase-tabs::before { flex: none; width: 12px; }
+.phase-tabs::after { flex: 1; }
+.console-header .panel-title {
+  display: flex;
+  align-items: center;
+  padding: 0 15px;
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.phase-tab {
+  padding: 0 20px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom-color: var(--border);
+  border-radius: 7px 7px 0 0;
+  cursor: pointer;
+}
+.phase-tab + .phase-tab { margin-left: 2px; }
+.phase-tab:hover:not(.active) { color: var(--text-strong); background: var(--btn-hover); }
+.phase-tab.active {
+  color: var(--text-strong);
+  background: var(--editor-bg);
+  border-color: var(--border);
+  border-bottom-color: transparent;
+  /* Accent strip along the open tab's top edge. */
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.phase-tab:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -3px;
 }
 
 .workspace {
@@ -398,12 +455,6 @@ body {
 .syn-comment { color: var(--syn-comment); font-style: italic; }
 .syn-operator { color: var(--syn-operator); }
 .syn-delimiter { color: var(--syn-delimiter); }
-.syn-invalid {
-  color: var(--syn-invalid);
-  text-decoration: underline wavy var(--syn-invalid);
-  text-decoration-skip-ink: none;
-  text-underline-offset: 3px;
-}
 .error-mark {
   background: var(--error-bg);
   border-radius: 2px;
@@ -538,7 +589,6 @@ body {
 .console-warn { color: var(--warn); }
 .console-ok { color: var(--ok); }
 .console-info { color: var(--muted); }
-
 /* ---------- Keyword reference ---------- */
 .keyword-panel { display: block; flex: none; }
 .keyword-summary {

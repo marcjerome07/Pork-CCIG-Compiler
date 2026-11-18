@@ -24,11 +24,11 @@ function Lexeme({ value }) {
   return value;
 }
 
-export default function TokenTable({ tokens }) {
+export default function TokenTable({ tokens, title = 'Lexer Table' }) {
   return (
     <section className="panel token-panel" aria-labelledby="tokens-title">
       <div className="panel-header">
-        <h2 id="tokens-title" className="panel-title">Lexer Table</h2>
+        <h2 id="tokens-title" className="panel-title">{title}</h2>
         <span className="panel-count">Count: {tokens.length}</span>
       </div>
       <div className="token-scroll">
