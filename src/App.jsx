@@ -14,7 +14,8 @@ const THEME_KEY = 'pork-theme-v2';
 // The compiler phases shown as tabs. Run always performs every phase in order.
 const PHASES = [
   { id: 'lexical', label: 'Lexical' },
-  { id: 'syntax', label: 'Syntax' },
+  // Syntax tab hidden until the parser exists. Uncomment to show it again.
+  // { id: 'syntax', label: 'Syntax' },
 ];
 
 const NO_RUN = { status: 'idle' };
@@ -148,7 +149,8 @@ export default function App() {
           <TokenTable tokens={tokens} title={tab === 'syntax' ? 'Tokens' : 'Lexer Table'} />
         </div>
         <ConsolePanel
-          tabs={<PhaseTabs phases={PHASES} active={tab} onSelect={setTab} />}
+          // The tab bar only appears once there is more than one phase to switch between.
+          tabs={PHASES.length > 1 ? <PhaseTabs phases={PHASES} active={tab} onSelect={setTab} /> : null}
           lines={consoleLines(tab, run)}
           onSelectError={(error) => editorRef.current?.revealError(error)}
         />

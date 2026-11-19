@@ -1,9 +1,9 @@
 // `tabs` (the phase tabs) sit on the panel's top edge like folder tabs; the
-// output below belongs to the open tab.
+// output below belongs to the open tab. Without tabs, the header is a plain one.
 export default function ConsolePanel({ tabs, lines, onSelectError }) {
   return (
     <section className="panel console-panel" aria-labelledby="console-title">
-      <div className="panel-header console-header">
+      <div className={tabs ? 'panel-header console-header' : 'panel-header'}>
         {tabs}
         <h2 id="console-title" className="panel-title">Console Output</h2>
       </div>
